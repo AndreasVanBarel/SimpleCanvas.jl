@@ -218,6 +218,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) # upload a single pix
 	else #rgb
 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
 	end
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
 	# glGenerateMipmap(GL_TEXTURE_2D)
 end
 
@@ -240,7 +241,7 @@ length(C::Canvas) = length(C.m)
 axes(C::Canvas) = axes(C.m)	
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 
-setindex!(C::Canvas, val, inds) = @error("setindex!(..., $val, $inds) is not yet supported")
+setindex!(C::Canvas, val, inds) = @error("setindex!(::Canvas, $val, $inds) is not yet supported")
 function setindex!(C::Canvas, val, i::Number, j::Number) # single value
 	setindex!(C, [val], [i], [j])
 end
@@ -260,13 +261,6 @@ function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X Ã
 	
 	t = time_ns()
 	if t-C.last_update > 1e9/C.fps #longer than 0.1 sec ago update
-		# for xp in x 
-		# 	for yp in y
-		# 		update_pixel(C, xp, yp)
-		# 	end
-		# end
-		# redraw(C)
-		# C.last_update = time_ns()
 		update(C)
 	else
 		C.update_pending = true
@@ -274,7 +268,7 @@ function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X Ã
 	# C.update_pending = true
 end
 function update(C::Canvas)
-	println("Zone to update is [$(C.up_minx):$(C.up_maxx)] Ã— [$(C.up_miny):$(C.up_maxy)]")
+	println("Update called. Zone to update is [$(C.up_minx):$(C.up_maxx)] Ã— [$(C.up_miny):$(C.up_maxy)]")
 
 	# reset updating area to none
 	C.update_pending = false
@@ -282,7 +276,6 @@ function update(C::Canvas)
 	C.up_maxx = C.up_maxy = 0
 
 	C.last_update = time_ns()
-	println("update called")
 	to_gpu(C) # should only happen on write to c.m
 	redraw(C)
 	C.last_update = time_ns()
@@ -299,7 +292,5 @@ function redraw(C::Canvas)
 	draw(C.sprite)
 	GLFW.SwapBuffers(C.window)
 end
-
-# ToDo: On setindex! keep track the minx, miny, maxx, maxy of all unpushed changes, then on update, push only the corresponding submatrix.
 
 end
