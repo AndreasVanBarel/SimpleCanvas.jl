@@ -51,6 +51,10 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
     last_update::UInt64 # last time that m was copied to canvas
 	update_pending::Bool # whether there is a change to m that is not reflected on the canvas
 	fps::Number
+	up_minx::Int 
+	up_miny::Int 
+	up_maxx::Int 
+	up_maxy::Int
     # finalizing (releasing memory when canvas becomes inaccessible)
     # function Canvas{T}(m::Matrix{T}, rgb::Function) where T
     #     C = new(m, rgb, nothing, nothing, 0)
@@ -64,7 +68,7 @@ end
 
 canvas(m::AbstractMatrix{T}, rgb::Function=rgb) where T = canvas(m, size(m)[2], size(m)[1], rgb)
 function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer, rgb::Function=rgb) where T 
-    C = Canvas{T}(m, rgb, nothing, nothing, 0, false, 10)
+    C = Canvas{T}(m, rgb, nothing, nothing, 0, true, 10, 1, 1, width, height)
     C.window = createwindow(width, height, "Simple Canvas for matrix at $(UInt(pointer(m)))") # Create window
 	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
 	tex = rgb(m)
@@ -203,26 +207,29 @@ function to_gpu(c::Canvas)
 	to_gpu(tex, textureP) 
 end
 
-# Uploads single pixel (xp,yp) of texture tex to GPU at address textureP[1]
-# function to_gpu(tex::Array{UInt8,3}, textureP, xp, yp) # upload a single pixel to GPU
-#     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
-#     isrgba = size(tex)[1]==4
+# Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
+function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) # upload a single pixel to GPU
+    size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
+    isrgba = size(tex)[1]==4
 
-# 	glBindTexture(GL_TEXTURE_2D, textureP[1])
-# 	if isrgba #rgba
-# 		glTexSubImage2D(GL_TEXTURE_2D, 0, xp, yp, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, tex)
-# 	else #rgb
-# 		glTexSubImage2D(GL_TEXTURE_2D, 0, xp, yp, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, tex)
-# 	end
-# 	# glGenerateMipmap(GL_TEXTURE_2D)
-# end
+	glBindTexture(GL_TEXTURE_2D, textureP[1])
+	if isrgba #rgba
+		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tex)
+	else #rgb
+		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
+	end
+	# glGenerateMipmap(GL_TEXTURE_2D)
+end
 
-# function to_gpu(c::Canvas, xp, yp)
-# 	textureP = [c.sprite.texture]
-# 	tex = c.rgb(c.m[xp,yp]) # 1x1 array with the corresponding pixel in it
-# 	tex = reshape(tex, 3,1,1)
-# 	to_gpu(tex, textureP, xp, yp) 
-# end
+function to_gpu_sub(c::Canvas)
+	textureP = [c.sprite.texture]
+	tex = c.rgb(c.m[c.up_minx:c.up_maxx, c.up_miny:c.up_maxy]) # 1x1 array with the corresponding pixel in it
+	x = c.up_minx 
+	y = c.up_miny
+	w = c.up_maxx - c.up_minx + 1
+	h = c.up_maxy - c.up_miny + 1
+	to_gpu(tex, textureP, x, y, w, h) 
+end
 
 ###################################
 ## Matrix operations on a Canvas ##
@@ -232,15 +239,25 @@ size(C::Canvas)	= size(C.m)
 length(C::Canvas) = length(C.m)	
 axes(C::Canvas) = axes(C.m)	
 getindex(C::Canvas, args...) = getindex(C.m, args...)
-function setindex!(C::Canvas, args...) 
-	# println("setindex! called with args $args")
 
-	# x = args[2]
-	# y = args[3]
-	# minx, maxx = extrema(x)
-	# miny, maxy = extrema(y)
+setindex!(C::Canvas, val, inds) = @error("setindex!(..., $val, $inds) is not yet supported")
+function setindex!(C::Canvas, val, i::Number, j::Number) # single value
+	setindex!(C, [val], [i], [j])
+end
 
-	setindex!(C.m, args...)		
+function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X × Y
+	# println("setindex! called with args $V, $X, $Y")
+
+	minx, maxx = extrema(X)
+	miny, maxy = extrema(Y)
+
+	C.up_minx = min(C.up_minx, minx)
+	C.up_maxx = max(C.up_maxx, maxx)
+	C.up_miny = min(C.up_miny, miny)
+	C.up_maxy = max(C.up_maxy, maxy)
+
+	setindex!(C.m, V, X, Y)		
+	
 	t = time_ns()
 	if t-C.last_update > 1e9/C.fps #longer than 0.1 sec ago update
 		# for xp in x 
@@ -257,10 +274,13 @@ function setindex!(C::Canvas, args...)
 	# C.update_pending = true
 end
 function update(C::Canvas)
-	# C.updating == true && return
-	# C.updating = true
+	println("Zone to update is [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
+
+	# reset updating area to none
 	C.update_pending = false
-	# sleep(t)
+	C.up_miny, C.up_minx = size(C.m)
+	C.up_maxx = C.up_maxy = 0
+
 	C.last_update = time_ns()
 	println("update called")
 	to_gpu(C) # should only happen on write to c.m
@@ -279,5 +299,7 @@ function redraw(C::Canvas)
 	draw(C.sprite)
 	GLFW.SwapBuffers(C.window)
 end
+
+# ToDo: On setindex! keep track the minx, miny, maxx, maxy of all unpushed changes, then on update, push only the corresponding submatrix.
 
 end
