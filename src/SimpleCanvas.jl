@@ -175,30 +175,54 @@ end
 ################################
 
 # Uploads texture tex to GPU at address textureP[1]
+# ToDo: should somehow figure out a way to check when this operation is done
 function to_gpu(tex::Array{UInt8,3}, textureP)
     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
     isrgba = size(tex)[1]==4
     width, height = size(tex)[2:3]
 
 	glBindTexture(GL_TEXTURE_2D, textureP[1])
-	if isrgba #rgb
+	if isrgba #rgba
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex)
-	else #rgba
+	else #rgb
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, tex)
 	end
-	glGenerateMipmap(GL_TEXTURE_2D)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST) #GL_LINEAR
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+	# glGenerateMipmap(GL_TEXTURE_2D)
+	# glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST) #GL_LINEAR
+	# glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
 	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
 	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
 	#glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, [0f0, 0f0, 0f0, 0f0])
+	# glFinish() # supposedly blocks until GL upload finished
 end
 
 function to_gpu(c::Canvas)
 	textureP = [c.sprite.texture]
 	tex = c.rgb(c.m)
-	to_gpu(tex, textureP)
+	to_gpu(tex, textureP) 
 end
+
+# Uploads single pixel (xp,yp) of texture tex to GPU at address textureP[1]
+# function to_gpu(tex::Array{UInt8,3}, textureP, xp, yp) # upload a single pixel to GPU
+#     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
+#     isrgba = size(tex)[1]==4
+
+# 	glBindTexture(GL_TEXTURE_2D, textureP[1])
+# 	if isrgba #rgba
+# 		glTexSubImage2D(GL_TEXTURE_2D, 0, xp, yp, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, tex)
+# 	else #rgb
+# 		glTexSubImage2D(GL_TEXTURE_2D, 0, xp, yp, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, tex)
+# 	end
+# 	# glGenerateMipmap(GL_TEXTURE_2D)
+# end
+
+# function to_gpu(c::Canvas, xp, yp)
+# 	textureP = [c.sprite.texture]
+# 	tex = c.rgb(c.m[xp,yp]) # 1x1 array with the corresponding pixel in it
+# 	tex = reshape(tex, 3,1,1)
+# 	to_gpu(tex, textureP, xp, yp) 
+# end
 
 ###################################
 ## Matrix operations on a Canvas ##
@@ -209,22 +233,46 @@ length(C::Canvas) = length(C.m)
 axes(C::Canvas) = axes(C.m)	
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 function setindex!(C::Canvas, args...) 
+	# println("setindex! called with args $args")
+
+	# x = args[2]
+	# y = args[3]
+	# minx, maxx = extrema(x)
+	# miny, maxy = extrema(y)
+
 	setindex!(C.m, args...)		
 	t = time_ns()
 	if t-C.last_update > 1e9/C.fps #longer than 0.1 sec ago update
+		# for xp in x 
+		# 	for yp in y
+		# 		update_pixel(C, xp, yp)
+		# 	end
+		# end
+		# redraw(C)
+		# C.last_update = time_ns()
 		update(C)
 	else
 		C.update_pending = true
 	end
+	# C.update_pending = true
 end
 function update(C::Canvas)
+	# C.updating == true && return
+	# C.updating = true
 	C.update_pending = false
 	# sleep(t)
 	C.last_update = time_ns()
-	# println("update called")
+	println("update called")
 	to_gpu(C) # should only happen on write to c.m
 	redraw(C)
+	C.last_update = time_ns()
 end
+# function update_pixel(C::Canvas, xp::Int, yp::Int)
+# 	C.update_pending = false
+# 	C.last_update = time_ns()
+# 	# println("update pixel called")
+# 	to_gpu(C, xp, yp) # should only happen on write to c.m
+# end
 
 # does not push anything to gpu, just redraws
 function redraw(C::Canvas)
