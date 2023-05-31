@@ -226,6 +226,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 end
 
 function to_gpu(c::Canvas)
+	# println("to_gpu called")
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
 	tex = rgb(c, c.m)
@@ -247,6 +248,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h)
 	end
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
 	# glGenerateMipmap(GL_TEXTURE_2D)
+	glFinish()
 end
 
 function to_gpu_sub(c::Canvas)
@@ -322,7 +324,7 @@ end
 function update(C::Canvas)
 	isnothing(C.window) && return
 	GLFW.MakeContextCurrent(C.window)
-	println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
+	# println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
 	# println("C.colormap is $(C.colormap)")
 
 	to_gpu(C) # pushes data to be updated to the GPU
