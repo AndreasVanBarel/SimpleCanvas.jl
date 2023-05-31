@@ -29,6 +29,33 @@ for i = 1:10000
     c[x:x+50, y:y+50].= 1 .-c[x:x+50, y:y+50]
 end
 
-# close(c)
+close(c)
 # note that m can still be used here.
 ```
+
+# Features 
+
+### Custom color map
+
+Change the color map by calling `setcolormap(c, cmap)`. This function `cmap` should map values in `c` (whatever type they may have) to a `Vector{UInt8}` of 3 elements representing the red, green and blue channels. The default function attempts to interpret the contents of `c` as real numbers, and maps `0.0` to `UInt8[0,0,0]` and `1.0` to `UInt8[255,255,255]`. E.g.,
+
+```julia
+function cmap(value::Float64)
+    if value < 0.0; r = g = b = 0.0;
+    elseif value <= 0.25; r = 0.0; g = 4 * value; b = 1.0; 
+    elseif value <= 0.5; r = 0.0; g = 1.0; b = 1.0 - 4 * (value - 0.25); 
+    elseif value <= 0.75; r = 4 * (value - 0.5); g = 1.0; b = 0.0
+    elseif value <= 1.0; r = 1.0; g = 1.0 - 4 * (value - 0.75); b = 0.0
+    else; r = g = b = 0.0; end
+    round.(UInt8, [255r, 255g, 255b])
+end
+setcolormap(c, cmap) # c::Canvas
+```
+
+# Notes
+
+- Do not edit the fields of c directly, i.e., use provided functions such as `setcolormap` instead of editing `c.colormap`.
+- Support for multiple simultaneous canvases is experimental.
+- Currently linear indexing of a canvas is not yet supported, i.e., `c[1] = 1` does not work.
+
+
