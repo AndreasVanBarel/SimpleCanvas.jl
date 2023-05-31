@@ -81,7 +81,7 @@ end
 
 function polling_task(C::Canvas)
 	while !GLFW.WindowShouldClose(C.window)
-		sleep(1/C.fps)
+		GLFW.MakeContextCurrent(C.window)
 		# println("Polling task executing...")
 		isnothing(C.window) && return
 		if C.update_pending == true && time_ns()-C.last_update > 1e9/C.fps
@@ -91,6 +91,7 @@ function polling_task(C::Canvas)
 		err = glGetError()
 		err == 0 || @error("GL Error code $err")
 		# C.last_update = time_ns()
+		sleep(1/C.fps)
 	end
 	close(C)
 end
@@ -202,6 +203,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 end
 
 function to_gpu(c::Canvas)
+	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
 	tex = c.rgb(c.m)
 	to_gpu(tex, textureP) 
@@ -223,6 +225,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) # upload a single pix
 end
 
 function to_gpu_sub(c::Canvas)
+	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
 	tex = c.rgb(c.m[c.up_minx:c.up_maxx, c.up_miny:c.up_maxy]) # 1x1 array with the corresponding pixel in it
 	x = c.up_minx 
@@ -265,9 +268,10 @@ function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X Ã
 	else
 		C.update_pending = true
 	end
-	# C.update_pending = true
 end
 function update(C::Canvas)
+	isnothing(C.window) && return
+	GLFW.MakeContextCurrent(C.window)
 	println("Update called. Zone to update is [$(C.up_minx):$(C.up_maxx)] Ã— [$(C.up_miny):$(C.up_maxy)]")
 
 	# reset updating area to none
