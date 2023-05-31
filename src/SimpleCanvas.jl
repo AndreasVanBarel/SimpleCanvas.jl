@@ -1,6 +1,6 @@
 module SimpleCanvas
 
-export canvas, close, rgb
+export canvas, close, setcolormap
 
 # Exported temporarily for development purposes
 export to_gpu, Canvas
@@ -16,18 +16,6 @@ import Base: size, length, axes, getindex, setindex!
 include("Sprite.jl")
 include("GLPrograms.jl")
 import .GLPrograms
-
-# Broadcast rgb on matrix
-function rgb(m::AbstractMatrix{T}) where T
-	rgbs = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-	for c in CartesianIndices(m); rgbs[:,c] .= rgb(m[c]); end
-	return rgbs
-end
-
-# Some defaults for rgb function; can do color maps and such later
-rgb(v::Float64) = fill(round(UInt8, v*255),3)
-# Need function to convert from type T to pixel color values.
-# Need function to rotate canvas (just changes quad vertices of course)
 
 programs = nothing
 
@@ -45,15 +33,15 @@ init()
 
 mutable struct Canvas{T} <: AbstractMatrix{T}
     const m::AbstractMatrix{T}
-	rgb::Function # T-> UInt8[3] 
+	colormap::Function # T -> UInt8[3] 
     window
 	sprite
     last_update::UInt64 # last time that m was copied to canvas
 	update_pending::Bool # whether there is a change to m that is not reflected on the canvas
 	fps::Number
-	up_minx::Int 
+	up_minx::Int # These four determine that the submatrix to be updated is contained within
+	up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
 	up_miny::Int 
-	up_maxx::Int 
 	up_maxy::Int
     # finalizing (releasing memory when canvas becomes inaccessible)
     # function Canvas{T}(m::Matrix{T}, rgb::Function) where T
@@ -68,16 +56,22 @@ end
 
 canvas(m::AbstractMatrix{T}, rgb::Function=rgb) where T = canvas(m, size(m)[2], size(m)[1], rgb)
 function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer, rgb::Function=rgb) where T 
-    C = Canvas{T}(m, rgb, nothing, nothing, 0, true, 10, 1, 1, width, height)
+    C = Canvas{T}(m, colormap_grayscale, nothing, nothing, 0, true, 10, 1, size(m)[1], 1, size(m)[2])
     C.window = createwindow(width, height, "Simple Canvas for matrix at $(UInt(pointer(m)))") # Create window
 	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
-	tex = rgb(m)
+	tex = rgb(C, m)
 	C.sprite = Sprite(tex) # Create sprite to show in window 
 	update(C)
 	task = @task polling_task(C)
 	schedule(task)
     return C
 end
+
+function fill_update_zone(C::Canvas)
+	C.update_pending = true
+	C.up_minx = C.up_miny = 1
+	C.up_maxx, C.up_maxy = size(C.m)
+end 
 
 function polling_task(C::Canvas)
 	while !GLFW.WindowShouldClose(C.window)
@@ -175,6 +169,35 @@ function make_framebuffer_size_callback(C)
 	return framebuffer_size_callback
 end
 
+##################
+## Colormapping ##
+##################
+
+# Broadcast colormap on matrix
+function rgb(C::Canvas, m::AbstractMatrix{T}) where T
+	rgbs = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
+	# println("Colormap is $(C.colormap)")
+	for c in CartesianIndices(m); rgbs[:,c] .= C.colormap(m[c]); end
+	# println("rgbs = $(rgbs[3, 1:5, 1:5])")
+	return rgbs
+end
+
+# A default colormap function
+function colormap_grayscale(v::Float64) 
+	v < 0 && (v = 0) # truncation
+	v > 1 && (v = 1) # truncation
+	fill(round(UInt8, v*255),3)
+end
+# Need function to convert from type T to pixel color values.
+# Need function to rotate canvas (just changes quad vertices of course)
+
+function setcolormap(C::Canvas, colormap::Function)
+	C.colormap = colormap
+	fill_update_zone(C)
+	update(C)
+	return
+end
+
 ################################
 ## Updating GPU mirror matrix ##
 ################################
@@ -205,14 +228,16 @@ end
 function to_gpu(c::Canvas)
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
-	tex = c.rgb(c.m)
+	tex = rgb(c, c.m)
 	to_gpu(tex, textureP) 
 end
 
 # Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
-function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) # upload a single pixel to GPU
+function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) 
     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
     isrgba = size(tex)[1]==4
+
+	println("$x $y $w $h")
 
 	glBindTexture(GL_TEXTURE_2D, textureP[1])
 	if isrgba #rgba
@@ -227,9 +252,9 @@ end
 function to_gpu_sub(c::Canvas)
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
-	tex = c.rgb(c.m[c.up_minx:c.up_maxx, c.up_miny:c.up_maxy]) # 1x1 array with the corresponding pixel in it
-	x = c.up_minx 
-	y = c.up_miny
+	tex = rgb(c, c.m[c.up_minx:c.up_maxx, c.up_miny:c.up_maxy]) # 1x1 array with the corresponding pixel in it
+	x = c.up_minx -1
+	y = c.up_miny -1
 	w = c.up_maxx - c.up_minx + 1
 	h = c.up_maxy - c.up_miny + 1
 	to_gpu(tex, textureP, x, y, w, h) 
@@ -297,16 +322,17 @@ end
 function update(C::Canvas)
 	isnothing(C.window) && return
 	GLFW.MakeContextCurrent(C.window)
-	println("Update called. Zone to update is [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
+	println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
+	# println("C.colormap is $(C.colormap)")
+
+	to_gpu(C) # pushes data to be updated to the GPU
+	redraw(C) # instructs the GPU to redraw
 
 	# reset updating area to none
 	C.update_pending = false
-	C.up_miny, C.up_minx = size(C.m)
-	C.up_maxx = C.up_maxy = 0
+	C.up_minx, C.up_miny = size(C.m)
+	C.up_maxx = C.up_maxy = 1
 
-	C.last_update = time_ns()
-	to_gpu(C) # should only happen on write to c.m
-	redraw(C)
 	C.last_update = time_ns()
 end
 # function update_pixel(C::Canvas, xp::Int, yp::Int)
