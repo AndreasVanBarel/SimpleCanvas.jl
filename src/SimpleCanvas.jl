@@ -244,13 +244,38 @@ length(C::Canvas) = length(C.m)
 axes(C::Canvas) = axes(C.m)	
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 
-setindex!(C::Canvas, val, inds) = @error("setindex!(::Canvas, $val, $inds) is not yet supported")
-function setindex!(C::Canvas, val, i::Number, j::Number) # single value
-	setindex!(C, [val], [i], [j])
+# Linear indices support
+# function setindex!(C::Canvas, val, ind) 
+# 	i = CartesianIndices(C.m)[ind]
+# 	setindex!(C, val, i)
+# end
+# function setindex!(C::Canvas, val, inds::Vector{CartesianIndex})
+# 	if length(val) != length(inds); C.m[inds] = val; end # this will error appropriately
+# 	for i in eachindex(1:length(inds))
+# 		setindex!(C, val[i], inds[i])
+# 	end
+# end
+# function setindex!(C::Canvas, val, ind::CartesianIndex)
+# 	setindex!(C, val, ind.I[1], ind.I[2])
+# end
+
+# function setindex!(C::Canvas, val, i::Number, j::Number) # single value
+# 	setindex!(C, [val], [i], [j])
+# end
+
+function setindex!(C::Canvas, val, ind)
+	@error("Linear indexing operation setindex!(::Canvas, $val, $inds) is not yet supported.")
 end
+
+setindex!(C::Canvas, V, ::Colon, Y) = setindex!(C,V,1:size(C.m)[1],Y)
+setindex!(C::Canvas, V, X, ::Colon) = setindex!(C,V,X,1:size(C.m)[2])
+setindex!(C::Canvas, V, ::Colon, ::Colon) = setindex!(C,V,1:size(C.m)[1],1:size(C.m)[2])
 
 function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X × Y
 	# println("setindex! called with args $V, $X, $Y")
+
+	if X === Colon(); X = 1:size(C.m)[1]; end
+	if Y === Colon(); Y = 1:size(C.m)[2]; end
 
 	minx, maxx = extrema(X)
 	miny, maxy = extrema(Y)
