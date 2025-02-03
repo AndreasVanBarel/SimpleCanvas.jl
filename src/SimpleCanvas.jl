@@ -17,6 +17,11 @@ include("Sprite.jl")
 include("GLPrograms.jl")
 import .GLPrograms
 
+# Settings
+max_time_fraction = 0.5
+
+
+
 programs = nothing
 
 # Initializes GLFW library
@@ -33,11 +38,13 @@ init()
 
 mutable struct Canvas{T} <: AbstractMatrix{T}
     const m::AbstractMatrix{T}
+	# const rgb::Matrix{UInt8,3} # RGB matrix
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
-    last_update::UInt64 # last time that m was copied to canvas
-	update_pending::Bool # whether there is a change to m that is not reflected on the canvas
+    last_update::UInt64 # last time that update() was called
+	next_update::UInt64 # next time that update() could (and should) be called
+	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
 	fps::Number
 	up_minx::Int # These four determine that the submatrix to be updated is contained within
 	up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
@@ -56,7 +63,7 @@ end
 
 canvas(m::AbstractMatrix{T}, rgb::Function=rgb) where T = canvas(m, size(m)[2], size(m)[1], rgb)
 function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer, rgb::Function=rgb) where T 
-    C = Canvas{T}(m, colormap_grayscale, nothing, nothing, 0, true, 10, 1, size(m)[1], 1, size(m)[2])
+    C = Canvas{T}(m, colormap_grayscale, nothing, nothing, 0, 0, true, 10, 1, size(m)[1], 1, size(m)[2])
     C.window = createwindow(width, height, "Simple Canvas for matrix at $(UInt(pointer(m)))") # Create window
 	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
 	tex = rgb(C, m)
@@ -78,20 +85,22 @@ function polling_task(C::Canvas)
 		GLFW.MakeContextCurrent(C.window)
 		# println("Polling task executing...")
 		isnothing(C.window) && return
-		if C.update_pending == true && time_ns()-C.last_update > 1e9/C.fps
+		if C.update_pending == true && time_ns() > C.next_update
+			println("==>update(C) called by polling task")
 			update(C) #TODO: This somewhat asynchronous update task might cause issues
+		else 
+			redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
 		end
 		GLFW.PollEvents()
 		err = glGetError()
 		err == 0 || @error("GL Error code $err")
-		# C.last_update = time_ns()
 		sleep(1/C.fps)
 	end
 	close(C)
 end
 
 # Create a window
-function createwindow(width::Int=640, height::Int=480, title::String="SimpleCanvas window (badly initialized)")
+function createwindow(width::Int=640, height::Int=480, title::String="SimpleCanvas window")
 	# Create a window and its OpenGL context
 	window = GLFW.CreateWindow(width, height, title)
 	isnothing(window) && @error("Window or context creation failed.")
@@ -216,21 +225,14 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, tex)
 	end
 	# glGenerateMipmap(GL_TEXTURE_2D)
-	# glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST) #GL_LINEAR
-	# glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
-	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
-	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
-	#glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, [0f0, 0f0, 0f0, 0f0])
 	# glFinish() # supposedly blocks until GL upload finished
 end
 
 function to_gpu(c::Canvas)
-	# println("to_gpu called")
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
-	tex = rgb(c, c.m)
-	to_gpu(tex, textureP) 
+	@time tex = rgb(c, c.m)
+	@time to_gpu(tex, textureP) 
 end
 
 # Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
@@ -246,7 +248,6 @@ function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h)
 	else #rgb
 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
 	end
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
 	# glGenerateMipmap(GL_TEXTURE_2D)
 	glFinish()
 end
@@ -290,52 +291,78 @@ getindex(C::Canvas, args...) = getindex(C.m, args...)
 # 	setindex!(C, [val], [i], [j])
 # end
 
-function setindex!(C::Canvas, val, ind)
-	@error("Linear indexing operation setindex!(::Canvas, $val, $inds) is not yet supported.")
-end
+### General indexing support
+function setindex!(C::Canvas, V, args...)
+	setindex!(C.m, V, args...) # update CPU
 
-setindex!(C::Canvas, V, ::Colon, Y) = setindex!(C,V,1:size(C.m)[1],Y)
-setindex!(C::Canvas, V, X, ::Colon) = setindex!(C,V,X,1:size(C.m)[2])
-setindex!(C::Canvas, V, ::Colon, ::Colon) = setindex!(C,V,1:size(C.m)[1],1:size(C.m)[2])
-
-function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X × Y
-	# println("setindex! called with args $V, $X, $Y")
-
-	if X === Colon(); X = 1:size(C.m)[1]; end
-	if Y === Colon(); Y = 1:size(C.m)[2]; end
-
-	minx, maxx = extrema(X)
-	miny, maxy = extrema(Y)
-
-	C.up_minx = min(C.up_minx, minx)
-	C.up_maxx = max(C.up_maxx, maxx)
-	C.up_miny = min(C.up_miny, miny)
-	C.up_maxy = max(C.up_maxy, maxy)
-
-	setindex!(C.m, V, X, Y)		
-	
 	t = time_ns()
-	if t-C.last_update > 1e9/C.fps #longer than 0.1 sec ago update
+	if t > C.next_update
+		println("==>update(C) called by setindex!")
 		update(C)
 	else
 		C.update_pending = true
 	end
 end
+
+
+
+### Experimental detailed indexing support
+# function setindex!(C::Canvas, val, ind)
+# 	@error("Linear indexing operation setindex!(::Canvas, $val, $inds) is not yet supported.")
+# end
+
+# setindex!(C::Canvas, V, ::Colon, Y) = setindex!(C,V,1:size(C.m)[1],Y)
+# setindex!(C::Canvas, V, X, ::Colon) = setindex!(C,V,X,1:size(C.m)[2])
+# setindex!(C::Canvas, V, ::Colon, ::Colon) = setindex!(C,V,1:size(C.m)[1],1:size(C.m)[2])
+
+# function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X × Y
+# 	# println("setindex! called with args $V, $X, $Y")
+
+# 	if X === Colon(); X = 1:size(C.m)[1]; end
+# 	if Y === Colon(); Y = 1:size(C.m)[2]; end
+
+# 	minx, maxx = extrema(X)
+# 	miny, maxy = extrema(Y)
+
+# 	C.up_minx = min(C.up_minx, minx)
+# 	C.up_maxx = max(C.up_maxx, maxx)
+# 	C.up_miny = min(C.up_miny, miny)
+# 	C.up_maxy = max(C.up_maxy, maxy)
+
+# 	setindex!(C.m, V, X, Y)		
+	
+# 	t = time_ns()
+# 	if t > C.next_update
+# 		update(C)
+# 	else
+# 		C.update_pending = true
+# 	end
+# end
+
 function update(C::Canvas)
+	# println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
+
+	C.last_update = time_ns()
+	C.update_pending = false
+
 	isnothing(C.window) && return
 	GLFW.MakeContextCurrent(C.window)
-	# println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
-	# println("C.colormap is $(C.colormap)")
+
+	# reset updating area to none
+	C.up_minx, C.up_miny = size(C.m)
+	C.up_maxx = C.up_maxy = 1
 
 	to_gpu(C) # pushes data to be updated to the GPU
 	redraw(C) # instructs the GPU to redraw
 
-	# reset updating area to none
-	C.update_pending = false
-	C.up_minx, C.up_miny = size(C.m)
-	C.up_maxx = C.up_maxy = 1
-
-	C.last_update = time_ns()
+	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most 50pct of the time goes to the canvas update. If the update takes longer than half the frame time, we allow the caller at least that same amount of time. The target fps will then not be reached.
+	t = time_ns()
+	update_time_elapsed = t - C.last_update
+	if update_time_elapsed > 1e9/C.fps*max_time_fraction
+		C.next_update = t + update_time_elapsed
+	else 
+		C.next_update = C.last_update + 1e9/C.fps
+	end
 end
 # function update_pixel(C::Canvas, xp::Int, yp::Int)
 # 	C.update_pending = false
