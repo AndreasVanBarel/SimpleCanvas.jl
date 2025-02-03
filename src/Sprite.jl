@@ -13,14 +13,29 @@ function Sprite(p1::Vec2d,p2::Vec2d,p3::Vec2d,p4::Vec2d,tex::Array{UInt8,3})
 	vertices = [crosspoint(p1,p2,p3,p4),p1,p2,p3,p4]
 
 	#Store and configure texture on the GPU
-	textureP = UInt32[0]
-	glGenTextures(1, textureP)
-	to_gpu(tex, textureP)
+	textureP = UInt32[0] # allocate pointer to GPU texture
+	glGenTextures(1, textureP) # generate pointer to GPU texture
+	configure_texture(textureP) # configure texture
+
+	to_gpu(tex, textureP) # copy provided data to GPU
 
     width, height = size(tex)[2:3]
     isrgba = size(tex)[1]==4
+
 	Sprite(textureP[1],width,height,isrgba,vertices)
 end
+
+function configure_texture(textureP)
+	glBindTexture(GL_TEXTURE_2D, textureP[1])
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST) #GL_LINEAR
+	# glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); #GL_LINEAR_MIPMAP_LINEAR requires mipmaps
+	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
+	#glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
+	#glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, [0f0, 0f0, 0f0, 0f0])
+end
+
+
 const default_vertices = [Vec2d(-1.0,1.0), Vec2d(1.0,1.0), Vec2d(-1.0,-1.0), Vec2d(1.0,-1.0)]
 # const default_vertices = [Vec2d(-1.0,-1.0), Vec2d(-1.0,1.0), Vec2d(1.0,-1.0), Vec2d(1.0,1.0)]
 Sprite(tex::Array{UInt8,3}) = Sprite(default_vertices..., tex)
