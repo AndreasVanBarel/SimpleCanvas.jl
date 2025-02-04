@@ -3,7 +3,7 @@ module SimpleCanvas
 export canvas, close, setcolormap
 
 # Exported temporarily for development purposes
-export to_gpu, Canvas
+export to_gpu, Canvas, map_to_rgb!
 
 using GLFW
 using ModernGL
@@ -18,8 +18,8 @@ include("GLPrograms.jl")
 import .GLPrograms
 
 # Settings
+fps = 60
 max_time_fraction = 0.5
-
 
 
 programs = nothing
@@ -29,7 +29,7 @@ function init()
 	GLFW.Init() || @error("GLFW failed to initialize")
 
 	# Specify OpenGL version
-	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 4);
+	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 3);
 	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MINOR, 3);
 	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
     # GLFW.WindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
@@ -37,8 +37,8 @@ end
 init()
 
 mutable struct Canvas{T} <: AbstractMatrix{T}
-    const m::AbstractMatrix{T}
-	# const rgb::Matrix{UInt8,3} # RGB matrix
+    m::Matrix{T}
+	rgb::Array{UInt8, 3} # RGB(A) matrix (preallocated for performance)
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
@@ -61,12 +61,18 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
     # end
 end
 
-canvas(m::AbstractMatrix{T}, rgb::Function=rgb) where T = canvas(m, size(m)[2], size(m)[1], rgb)
-function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer, rgb::Function=rgb) where T 
-    C = Canvas{T}(m, colormap_grayscale, nothing, nothing, 0, 0, true, 10, 1, size(m)[1], 1, size(m)[2])
+# TODO: Create a better construction interface, probably with Canvas type itself as name
+# such that Canvas{T}(w,h) creates a canvas of size w×h
+canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1])
+function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer) where T 
+	println("Creating canvas for matrix at $(UInt(pointer(m)))")
+	m = collect(m)::Matrix{T}
+	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
+    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 0, 0, true, fps, 1, size(m)[1], 1, size(m)[2])
     C.window = createwindow(width, height, "Simple Canvas for matrix at $(UInt(pointer(m)))") # Create window
 	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
-	tex = rgb(C, m)
+	map_to_rgb!(C)
+	tex = C.rgb
 	C.sprite = Sprite(tex) # Create sprite to show in window 
 	update(C)
 	task = @task polling_task(C)
@@ -183,19 +189,24 @@ end
 ##################
 
 # Broadcast colormap on matrix
-function rgb(C::Canvas, m::AbstractMatrix{T}) where T
-	rgbs = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-	# println("Colormap is $(C.colormap)")
-	for c in CartesianIndices(m); rgbs[:,c] .= C.colormap(m[c]); end
-	# println("rgbs = $(rgbs[3, 1:5, 1:5])")
-	return rgbs
+function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
+	# NOTE: The colormap is passed as an argument such that the Julia compiler would specialize on it!
+
+	for i in CartesianIndices(C.m)
+		v = C.m[i]
+		color = colormap(v)::NTuple{3,UInt8}
+		C.rgb[1,i] = color[1]
+		C.rgb[2,i] = color[2]
+		C.rgb[3,i] = color[3]
+	end
 end
 
 # A default colormap function
-function colormap_grayscale(v::Float64) 
-	v < 0 && (v = 0) # truncation
-	v > 1 && (v = 1) # truncation
-	fill(round(UInt8, v*255),3)
+function colormap_grayscale(v::Float64)
+	v < 0 && (v = 0.0) # truncation
+	v > 1 && (v = 1.0) # truncation
+	r = round(UInt8, v*255)
+	return (r,r,r)
 end
 # Need function to convert from type T to pixel color values.
 # Need function to rotate canvas (just changes quad vertices of course)
@@ -203,7 +214,7 @@ end
 function setcolormap(C::Canvas, colormap::Function)
 	C.colormap = colormap
 	fill_update_zone(C)
-	update(C)
+	update(C) # TODO: Also throttle this
 	return
 end
 
@@ -231,37 +242,37 @@ end
 function to_gpu(c::Canvas)
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
-	@time tex = rgb(c, c.m)
-	@time to_gpu(tex, textureP) 
+	@time map_to_rgb!(c)
+	@time to_gpu(c.rgb, textureP) 
 end
 
 # Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
-function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) 
-    size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
-    isrgba = size(tex)[1]==4
+# function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) 
+#     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
+#     isrgba = size(tex)[1]==4
 
-	println("$x $y $w $h")
+# 	println("$x $y $w $h")
 
-	glBindTexture(GL_TEXTURE_2D, textureP[1])
-	if isrgba #rgba
-		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tex)
-	else #rgb
-		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
-	end
-	# glGenerateMipmap(GL_TEXTURE_2D)
-	glFinish()
-end
+# 	glBindTexture(GL_TEXTURE_2D, textureP[1])
+# 	if isrgba #rgba
+# 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tex)
+# 	else #rgb
+# 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
+# 	end
+# 	# glGenerateMipmap(GL_TEXTURE_2D)
+# 	glFinish()
+# end
 
-function to_gpu_sub(c::Canvas)
-	GLFW.MakeContextCurrent(c.window)
-	textureP = [c.sprite.texture]
-	tex = rgb(c, c.m[c.up_minx:c.up_maxx, c.up_miny:c.up_maxy]) # 1x1 array with the corresponding pixel in it
-	x = c.up_minx -1
-	y = c.up_miny -1
-	w = c.up_maxx - c.up_minx + 1
-	h = c.up_maxy - c.up_miny + 1
-	to_gpu(tex, textureP, x, y, w, h) 
-end
+# function to_gpu_sub(c::Canvas)
+# 	GLFW.MakeContextCurrent(c.window)
+# 	textureP = [c.sprite.texture]
+# 	tex = map_to_rgb(c, c.up_minx:c.up_maxx, c.up_miny:c.up_maxy) # 1x1 array with the corresponding pixel in it
+# 	x = c.up_minx -1
+# 	y = c.up_miny -1
+# 	w = c.up_maxx - c.up_minx + 1
+# 	h = c.up_maxy - c.up_miny + 1
+# 	to_gpu(tex, textureP, x, y, w, h) 
+# end
 
 ###################################
 ## Matrix operations on a Canvas ##
@@ -361,7 +372,7 @@ function update(C::Canvas)
 	if update_time_elapsed > 1e9/C.fps*max_time_fraction
 		C.next_update = t + update_time_elapsed
 	else 
-		C.next_update = C.last_update + 1e9/C.fps
+		C.next_update = C.last_update + round(UInt64, 1e9/C.fps)
 	end
 end
 # function update_pixel(C::Canvas, xp::Int, yp::Int)
