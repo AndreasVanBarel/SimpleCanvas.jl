@@ -7,12 +7,11 @@ This could be educational for understanding certain linear algebra algorithms.
 
 ## Installation
 
-This is installed using the standard tools of the [package manager](https://julialang.github.io/Pkg.jl/v1/getting-started/):
+By using the [package manager](https://julialang.github.io/Pkg.jl/v1/getting-started/):
 
 ```julia
-pkg> add https://github.com/AndreasVanBarel/SimpleCanvas.jl.git
+] add https://github.com/AndreasVanBarel/SimpleCanvas.jl.git
 ```
-You get the `pkg>` prompt by hitting `]` as the first character of the line.
 
 # Example
 
