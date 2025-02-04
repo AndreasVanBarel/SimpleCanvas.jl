@@ -1,9 +1,9 @@
 module SimpleCanvas
 
-export canvas, close, setcolormap
+export canvas, close, colormap!, name!, diagnostic_level!, target_fps! #, show_fps!
 
 # Exported temporarily for development purposes
-export to_gpu, Canvas, map_to_rgb!
+export Canvas, to_gpu, map_to_rgb!
 
 using GLFW
 using ModernGL
@@ -18,8 +18,8 @@ include("GLPrograms.jl")
 import .GLPrograms
 
 # Settings
-fps = 60
-max_time_fraction = 0.5
+default_fps = 60
+default_max_time_fraction = 0.5
 
 
 programs = nothing
@@ -46,6 +46,9 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	next_update::UInt64 # next time that update() could (and should) be called
 	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
 	fps::Number
+	show_fps::Bool
+	diagnostic_level::Int # 0: none, 1: uploads to GPU, 2: + redraws
+	name::String
 	up_minx::Int # These four determine that the submatrix to be updated is contained within
 	up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
 	up_miny::Int 
@@ -63,40 +66,49 @@ end
 
 # TODO: Create a better construction interface, probably with Canvas type itself as name
 # such that Canvas{T}(w,h) creates a canvas of size w×h
-canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1])
-function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer) where T 
-	println("Creating canvas for matrix at $(UInt(pointer(m)))")
+canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1]; name = "Simple Canvas")
+function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::String) where T 
+	# println("Creating canvas for matrix at $(UInt(pointer(m)))")
 	m = collect(m)::Matrix{T}
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 0, 0, true, fps, 1, size(m)[1], 1, size(m)[2])
-    C.window = createwindow(width, height, "Simple Canvas for matrix at $(UInt(pointer(m)))") # Create window
+	diagnostic_level = 0
+    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
+		0, 0, true, default_fps, true,
+		diagnostic_level, name, 
+		1, size(m)[1], 1, size(m)[2])
+
+	# Create OpenGL context
+    C.window = createwindow(width, height, name) # Create window
 	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
 	map_to_rgb!(C)
 	tex = C.rgb
 	C.sprite = Sprite(tex) # Create sprite to show in window 
-	update(C)
+
+	# Create the polling task
 	task = @task polling_task(C)
 	schedule(task)
     return C
 end
 
-function fill_update_zone(C::Canvas)
-	C.update_pending = true
-	C.up_minx = C.up_miny = 1
-	C.up_maxx, C.up_maxy = size(C.m)
-end 
-
 function polling_task(C::Canvas)
+	last_redraw_only = time_ns()
 	while !GLFW.WindowShouldClose(C.window)
 		GLFW.MakeContextCurrent(C.window)
 		# println("Polling task executing...")
 		isnothing(C.window) && return
 		if C.update_pending == true && time_ns() > C.next_update
-			println("==>update(C) called by polling task")
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
 			update(C) #TODO: This somewhat asynchronous update task might cause issues
 		else 
+			C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
 			redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
+			# if C.show_fps
+			# 	last_redraw = max(last_redraw_only, C.last_update)
+			# 	fps = round(Int,1e9/(time_ns()-last_redraw))
+			# 	GLFW.SetWindowTitle(C.window, "$(C.name) @ $(fps)fps ($(C.fps))")
+			# end
 		end
+		last_redraw_only = time_ns()
 		GLFW.PollEvents()
 		err = glGetError()
 		err == 0 || @error("GL Error code $err")
@@ -105,7 +117,6 @@ function polling_task(C::Canvas)
 	close(C)
 end
 
-# Create a window
 function createwindow(width::Int=640, height::Int=480, title::String="SimpleCanvas window")
 	# Create a window and its OpenGL context
 	window = GLFW.CreateWindow(width, height, title)
@@ -161,11 +172,11 @@ function close(C::Canvas)
 end
 
 function show(io::IO, C::Canvas) 
-    println(io, "Canvas mirroring the matrix")
+    println(io, "$(typeof(C)) named '$(C.name)'")
     show(io, C.m)
 end
 function show(io::IO, mime::MIME"text/plain", C::Canvas)
-    println(io, "Canvas mirroring the matrix")
+    println(io, "$(typeof(C)) named '$(C.name)'")
     show(io, mime, C.m)
 end
 
@@ -183,6 +194,31 @@ function make_framebuffer_size_callback(C)
 	end
 	return framebuffer_size_callback
 end
+
+# Setting options 
+function name!(C::Canvas, name::String)
+	C.name = name
+	GLFW.SetWindowTitle(C.window, name);
+end
+
+function diagnostic_level!(C::Canvas, level::Int)
+	C.diagnostic_level = level
+end
+
+function target_fps!(C::Canvas, fps::Number)
+	C.fps = fps
+end
+
+function show_fps!(C::Canvas)
+	C.show_fps = true
+end
+
+# NOTE: Unused function
+function fill_update_zone(C::Canvas)
+	C.update_pending = true
+	C.up_minx = C.up_miny = 1
+	C.up_maxx, C.up_maxy = size(C.m)
+end 
 
 ##################
 ## Colormapping ##
@@ -211,9 +247,10 @@ end
 # Need function to convert from type T to pixel color values.
 # Need function to rotate canvas (just changes quad vertices of course)
 
-function setcolormap(C::Canvas, colormap::Function)
+function colormap!(C::Canvas, colormap::Function)
 	C.colormap = colormap
 	fill_update_zone(C)
+	C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setcolormap)")
 	update(C) # TODO: Also throttle this
 	return
 end
@@ -242,8 +279,8 @@ end
 function to_gpu(c::Canvas)
 	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
-	@time map_to_rgb!(c)
-	@time to_gpu(c.rgb, textureP) 
+	map_to_rgb!(c)
+	to_gpu(c.rgb, textureP) 
 end
 
 # Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
@@ -308,14 +345,12 @@ function setindex!(C::Canvas, V, args...)
 
 	t = time_ns()
 	if t > C.next_update
-		println("==>update(C) called by setindex!")
+		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
 		update(C)
 	else
 		C.update_pending = true
 	end
 end
-
-
 
 ### Experimental detailed indexing support
 # function setindex!(C::Canvas, val, ind)
@@ -369,7 +404,7 @@ function update(C::Canvas)
 	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most 50pct of the time goes to the canvas update. If the update takes longer than half the frame time, we allow the caller at least that same amount of time. The target fps will then not be reached.
 	t = time_ns()
 	update_time_elapsed = t - C.last_update
-	if update_time_elapsed > 1e9/C.fps*max_time_fraction
+	if update_time_elapsed > 1e9/C.fps*default_max_time_fraction
 		C.next_update = t + update_time_elapsed
 	else 
 		C.next_update = C.last_update + round(UInt64, 1e9/C.fps)

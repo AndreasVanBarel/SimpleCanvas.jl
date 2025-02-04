@@ -33,7 +33,7 @@ close(c)
 
 ### Custom color map
 
-Change the color map by calling `setcolormap(c, cmap)`. This function `cmap` should map values in `c` (whatever type they may have) to a `Tuple{UInt8, UInt8, UInt8}` representing the red, green and blue channels. The default function attempts to interpret the contents of `c` as real numbers, and maps `0.0` to `(0,0,0)` and `1.0` to `(255,255,255)`. E.g.,
+Change the color map by calling `colormap!(c, cmap)`. This function `cmap` should map values in `c` (whatever type they may have) to a `Tuple{UInt8, UInt8, UInt8}` representing the red, green and blue channels. The default function attempts to interpret the contents of `c` as real numbers, and maps `0.0` to `(0,0,0)` and `1.0` to `(255,255,255)`. E.g.,
 
 ```julia
 function colormap(value::Float64)
@@ -45,12 +45,20 @@ function colormap(value::Float64)
     else; r = g = b = 0.0; end
     round.(UInt8, 255 .*(r,g,b))
 end
-setcolormap(c, cmap) # c::Canvas
+colormap!(c, cmap) # c::Canvas
 ```
+
+### Other options
+
+Given a `Canvas c`:
+ - `target_fps!(c,t)` sets target fps to `t`.
+ - `show_fps!(c,true)` shows measured fps in window title. (Available in a future release)
+ - `name!(c,n)` changes the window name to `n`.
+ - `diagnostic_level!(c,lvl)` shows diagnostic messages. `lvl = 0`: none, `lvl = 1`: only uploads to GPU, `lvl = 2`: also background redraws 
 
 # Notes
 
-- Do not edit the fields of c directly, i.e., use provided functions such as `setcolormap` instead of editing `c.colormap`.
+- Do not edit the fields of a `Canvas` directly, i.e., use provided functions such as `colormap!` instead of editing `c.colormap`.
 - Support for multiple simultaneous canvases is experimental.
 
 
