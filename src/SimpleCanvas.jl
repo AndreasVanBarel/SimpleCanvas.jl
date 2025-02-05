@@ -10,6 +10,8 @@ using GLFW
 using ModernGL
 using LinearAlgebra
 
+# using Base.Threads
+
 import Base: close
 import Base: show
 import Base: size, length, axes, getindex, setindex!
@@ -20,9 +22,9 @@ import .GLPrograms
 
 # Settings
 default_fps = 60
-default_max_time_fraction = 0.5
+max_time_fraction = 0.5
 default_diagnostic_level = 0
-default_setindex_updates_immediately = false
+default_updates_immediately = true
 
 programs = nothing
 
@@ -47,8 +49,8 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	sprite
 
 	# Timing and update management
-    last_update::UInt64 # last time that update() was called
-	next_update::UInt64 # next time that update() could (and should) be called
+    last_update::UInt64 # last time that update() was called (time at the start of the call)
+	next_update::UInt64 # next time that update() could (and should) be called (set at the end of the previous update() call)
 	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
 	updates_immediately::Bool
 	fps::Number
@@ -80,7 +82,7 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	m = collect(m)::Matrix{T}
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
     C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
-		0, 0, true, default_setindex_updates_immediately, default_fps, 
+		0, 0, true, default_updates_immediately, default_fps, 
 		true, default_diagnostic_level, name, 
 		1, size(m)[1], 1, size(m)[2])
 
@@ -94,16 +96,19 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# Create the polling task
 	task = @task polling_task(C)
 	schedule(task)
+	# task = Threads.@spawn polling_task(C) 
     return C
 end
 
 function polling_task(C::Canvas)
 	while !GLFW.WindowShouldClose(C.window)
 		t_start = time_ns()
+		# did_update = false
 		GLFW.MakeContextCurrent(C.window)
-		# println("Polling task executing...")
+		# println("Polling task executing... $(C.update_pending), $(time_ns()), $(C.next_update)")
 		isnothing(C.window) && return
 		if C.update_pending == true && time_ns() > C.next_update
+			did_update = true
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
 			update!(C) 
 		else 
@@ -118,10 +123,12 @@ function polling_task(C::Canvas)
 		GLFW.PollEvents()
 		err = glGetError()
 		err == 0 || @error("GL Error code $err")
-		# Δt = time_ns() - t_start
-		# println("Δt = $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
-		# Δt_next = C.next_update - time_ns()
-		# # println("C.next_update: $(C.next_update), which is in $(1e-9Δt_next)s ($(round(Int,1e9/Δt_next)) fps")
+		# if did_update
+		# 	Δt = time_ns() - t_start
+		# 	println("Δt = $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
+		# 	Δt_next = C.next_update - time_ns()
+		# 	# println("C.next_update: $(C.next_update), which is in $(1e-9Δt_next)s ($(round(Int,1e9/Δt_next)) fps")
+		# end
 		sleep(1/C.fps)
 	end
 	close(C)
@@ -135,7 +142,7 @@ function createwindow(width::Int=640, height::Int=480, title::String="SimpleCanv
 	GLFW.MakeContextCurrent(window) # Make the window's context current
 	glViewport(0, 0, width, height)
 
-	GLFW.SwapInterval(1) #Activate V-sync
+	GLFW.SwapInterval(0) #Activate V-sync (not necessary since we are using sleep in the polling task)
 
 	# Callback functions
 	# GLFW.SetErrorCallback(error_callback)
@@ -199,7 +206,7 @@ function make_framebuffer_size_callback(C)
 	function framebuffer_size_callback(window::GLFW.Window, width, height)
 		glViewport(0, 0, width, height);
 		redraw(C)
-		#println("The window was resized to $width × $height")
+		# println("The window was resized to $width × $height")
 		return nothing
 	end
 	return framebuffer_size_callback
@@ -424,10 +431,14 @@ function update!(C::Canvas)
 	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most 50pct of the time goes to the canvas update. If the update takes longer than half the frame time, we allow the caller at least that same amount of time. The target fps will then not be reached.
 	t = time_ns()
 	update_time_elapsed = t - C.last_update
-	if update_time_elapsed > 1e9/C.fps*default_max_time_fraction
-		C.next_update = t + update_time_elapsed
+	if update_time_elapsed > 1e9/C.fps*max_time_fraction
+		C.next_update = C.last_update + update_time_elapsed/max_time_fraction
 	else 
 		C.next_update = C.last_update + round(UInt64, 1e9/C.fps)
+	end
+	if C.diagnostic_level >= 1
+		Δupdate = C.next_update - C.last_update
+		println("Canvas '$(C.name)': updated in $(1e-9update_time_elapsed)s, next in $(1e-9update_time_elapsed)s ($(round(Int,1e9/Δupdate)) fps)")
 	end
 end
 # function update_pixel(C::Canvas, xp::Int, yp::Int)
@@ -437,10 +448,13 @@ end
 # 	to_gpu(C, xp, yp) # should only happen on write to c.m
 # end
 
-# does not push anything to gpu, just redraws
+# does not push anything to gpu, just redraws. Is extremely fast (often <10μs)
 function redraw(C::Canvas)
+	# time_start = time_ns()
 	draw(C.sprite)
 	GLFW.SwapBuffers(C.window)
+	# Δt = time_ns() - time_start
+	# println("Redraw took $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
 end
 
 end
