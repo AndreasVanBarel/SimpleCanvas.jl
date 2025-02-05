@@ -1,6 +1,7 @@
 module SimpleCanvas
 
 export canvas, close, colormap!, name!, diagnostic_level!, target_fps! #, show_fps!
+export vsync!
 
 # Exported temporarily for development purposes
 export Canvas, to_gpu, map_to_rgb!
@@ -20,7 +21,8 @@ import .GLPrograms
 # Settings
 default_fps = 60
 default_max_time_fraction = 0.5
-
+default_diagnostic_level = 0
+default_setindex_updates_immediately = false
 
 programs = nothing
 
@@ -37,15 +39,21 @@ end
 init()
 
 mutable struct Canvas{T} <: AbstractMatrix{T}
+	# Core functionality
     m::Matrix{T}
 	rgb::Array{UInt8, 3} # RGB(A) matrix (preallocated for performance)
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
+
+	# Timing and update management
     last_update::UInt64 # last time that update() was called
 	next_update::UInt64 # next time that update() could (and should) be called
 	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
+	updates_immediately::Bool
 	fps::Number
+
+	# Additional functionality
 	show_fps::Bool
 	diagnostic_level::Int # 0: none, 1: uploads to GPU, 2: + redraws
 	name::String
@@ -71,10 +79,9 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# println("Creating canvas for matrix at $(UInt(pointer(m)))")
 	m = collect(m)::Matrix{T}
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-	diagnostic_level = 0
     C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
-		0, 0, true, default_fps, true,
-		diagnostic_level, name, 
+		0, 0, true, default_setindex_updates_immediately, default_fps, 
+		true, default_diagnostic_level, name, 
 		1, size(m)[1], 1, size(m)[2])
 
 	# Create OpenGL context
@@ -91,14 +98,14 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 end
 
 function polling_task(C::Canvas)
-	last_redraw_only = time_ns()
 	while !GLFW.WindowShouldClose(C.window)
+		t_start = time_ns()
 		GLFW.MakeContextCurrent(C.window)
 		# println("Polling task executing...")
 		isnothing(C.window) && return
 		if C.update_pending == true && time_ns() > C.next_update
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
-			update(C) #TODO: This somewhat asynchronous update task might cause issues
+			update!(C) 
 		else 
 			C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
 			redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
@@ -108,10 +115,13 @@ function polling_task(C::Canvas)
 			# 	GLFW.SetWindowTitle(C.window, "$(C.name) @ $(fps)fps ($(C.fps))")
 			# end
 		end
-		last_redraw_only = time_ns()
 		GLFW.PollEvents()
 		err = glGetError()
 		err == 0 || @error("GL Error code $err")
+		# Δt = time_ns() - t_start
+		# println("Δt = $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
+		# Δt_next = C.next_update - time_ns()
+		# # println("C.next_update: $(C.next_update), which is in $(1e-9Δt_next)s ($(round(Int,1e9/Δt_next)) fps")
 		sleep(1/C.fps)
 	end
 	close(C)
@@ -213,12 +223,17 @@ function show_fps!(C::Canvas)
 	C.show_fps = true
 end
 
+function vsync!(C::Canvas, vsync::Bool)
+	GLFW.MakeContextCurrent(C.window)
+	GLFW.SwapInterval(vsync ? 1 : 0)
+end
+
 # NOTE: Unused function
-function fill_update_zone(C::Canvas)
-	C.update_pending = true
-	C.up_minx = C.up_miny = 1
-	C.up_maxx, C.up_maxy = size(C.m)
-end 
+# function fill_update_zone(C::Canvas)
+# 	C.update_pending = true
+# 	C.up_minx = C.up_miny = 1
+# 	C.up_maxx, C.up_maxy = size(C.m)
+# end 
 
 ##################
 ## Colormapping ##
@@ -249,10 +264,14 @@ end
 
 function colormap!(C::Canvas, colormap::Function)
 	C.colormap = colormap
-	fill_update_zone(C)
-	C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setcolormap)")
-	update(C) # TODO: Also throttle this
-	return
+	C.update_pending = true
+	if C.updates_immediately
+		t = time_ns()
+		if t > C.next_update
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setcolormap)")
+			update!(C)
+		end
+	end
 end
 
 ################################
@@ -343,12 +362,13 @@ getindex(C::Canvas, args...) = getindex(C.m, args...)
 function setindex!(C::Canvas, V, args...)
 	setindex!(C.m, V, args...) # update CPU
 
-	t = time_ns()
-	if t > C.next_update
-		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
-		update(C)
-	else
-		C.update_pending = true
+	C.update_pending = true
+	if C.updates_immediately
+		t = time_ns()
+		if t > C.next_update
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
+			update!(C)
+		end
 	end
 end
 
@@ -385,7 +405,7 @@ end
 # 	end
 # end
 
-function update(C::Canvas)
+function update!(C::Canvas)
 	# println("Update zone [$(C.up_minx):$(C.up_maxx)] × [$(C.up_miny):$(C.up_maxy)]")
 
 	C.last_update = time_ns()
