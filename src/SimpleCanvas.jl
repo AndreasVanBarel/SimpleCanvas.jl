@@ -22,7 +22,7 @@ import .GLPrograms
 
 # Settings
 default_fps = 60
-max_time_fraction = 0.5
+max_time_fraction = 0.25
 default_diagnostic_level = 0
 default_updates_immediately = true
 
@@ -432,7 +432,7 @@ function update!(C::Canvas)
 	t = time_ns()
 	update_time_elapsed = t - C.last_update
 	if update_time_elapsed > 1e9/C.fps*max_time_fraction
-		C.next_update = C.last_update + update_time_elapsed/max_time_fraction
+		C.next_update = C.last_update + round(UInt64, update_time_elapsed/max_time_fraction)
 	else 
 		C.next_update = C.last_update + round(UInt64, 1e9/C.fps)
 	end
