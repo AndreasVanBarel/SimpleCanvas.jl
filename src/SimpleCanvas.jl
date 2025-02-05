@@ -63,15 +63,12 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
 	up_miny::Int 
 	up_maxy::Int
+
     # finalizing (releasing memory when canvas becomes inaccessible)
-    # function Canvas{T}(m::Matrix{T}, rgb::Function) where T
-    #     C = new(m, rgb, nothing, nothing, 0)
-    #     function f(C)
-    #         @async println("Finalizing $C since there are no pointers to C anymore")
-    #         close(C)
-    #     end
-    #     finalizer(f, C)
-    # end
+    function Canvas{T}(args...) where T
+        C = new(args...)
+        finalizer(close, C)
+    end
 end
 
 # TODO: Create a better construction interface, probably with Canvas type itself as name
@@ -94,6 +91,8 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	C.sprite = Sprite(tex) # Create sprite to show in window 
 
 	# Create the polling task
+	# Note: If we don't want the spawned Task to keep the canvas alive, we could use a WeakRef:
+	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
 	task = @task polling_task(C)
 	schedule(task)
 	# task = Threads.@spawn polling_task(C) 
@@ -326,14 +325,14 @@ end
 # 	glFinish()
 # end
 
-# function to_gpu_sub(c::Canvas)
-# 	GLFW.MakeContextCurrent(c.window)
-# 	textureP = [c.sprite.texture]
-# 	tex = map_to_rgb(c, c.up_minx:c.up_maxx, c.up_miny:c.up_maxy) # 1x1 array with the corresponding pixel in it
-# 	x = c.up_minx -1
-# 	y = c.up_miny -1
-# 	w = c.up_maxx - c.up_minx + 1
-# 	h = c.up_maxy - c.up_miny + 1
+# function to_gpu_sub(C::Canvas)
+# 	GLFW.MakeContextCurrent(C.window)
+# 	textureP = [C.sprite.texture]
+# 	tex = map_to_rgb(C, C.up_minx:C.up_maxx, C.up_miny:C.up_maxy) # 1x1 array with the corresponding pixel in it
+# 	x = C.up_minx -1
+# 	y = C.up_miny -1
+# 	w = C.up_maxx - C.up_minx + 1
+# 	h = C.up_maxy - C.up_miny + 1
 # 	to_gpu(tex, textureP, x, y, w, h) 
 # end
 
