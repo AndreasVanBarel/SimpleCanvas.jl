@@ -100,37 +100,44 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 end
 
 function polling_task(C::Canvas)
-	while !GLFW.WindowShouldClose(C.window)
-		t_start = time_ns()
-		# did_update = false
-		GLFW.MakeContextCurrent(C.window)
-		# println("Polling task executing... $(C.update_pending), $(time_ns()), $(C.next_update)")
-		isnothing(C.window) && return
-		if C.update_pending == true && time_ns() > C.next_update
-			did_update = true
-			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
-			update!(C) 
-		else 
-			C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
-			redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
-			# if C.show_fps
-			# 	last_redraw = max(last_redraw_only, C.last_update)
-			# 	fps = round(Int,1e9/(time_ns()-last_redraw))
-			# 	GLFW.SetWindowTitle(C.window, "$(C.name) @ $(fps)fps ($(C.fps))")
+	try
+		while !GLFW.WindowShouldClose(C.window)
+			t_start = time_ns()
+			# did_update = false
+			GLFW.MakeContextCurrent(C.window)
+			# println("Polling task executing... $(C.update_pending), $(time_ns()), $(C.next_update)")
+			isnothing(C.window) && return
+			if C.update_pending == true && time_ns() > C.next_update
+				did_update = true
+				C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
+				update!(C) 
+			else 
+				C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
+				redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
+				# if C.show_fps
+				# 	last_redraw = max(last_redraw_only, C.last_update)
+				# 	fps = round(Int,1e9/(time_ns()-last_redraw))
+				# 	GLFW.SetWindowTitle(C.window, "$(C.name) @ $(fps)fps ($(C.fps))")
+				# end
+			end
+			GLFW.PollEvents()
+			err = glGetError()
+			if err != 0
+				throw(ErrorException("GL Error code $err"))
+			end
+			# if did_update
+			# 	Δt = time_ns() - t_start
+			# 	println("Δt = $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
+			# 	Δt_next = C.next_update - time_ns()
+			# 	# println("C.next_update: $(C.next_update), which is in $(1e-9Δt_next)s ($(round(Int,1e9/Δt_next)) fps")
 			# end
+			sleep(1/C.fps)
 		end
-		GLFW.PollEvents()
-		err = glGetError()
-		err == 0 || @error("GL Error code $err")
-		# if did_update
-		# 	Δt = time_ns() - t_start
-		# 	println("Δt = $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
-		# 	Δt_next = C.next_update - time_ns()
-		# 	# println("C.next_update: $(C.next_update), which is in $(1e-9Δt_next)s ($(round(Int,1e9/Δt_next)) fps")
-		# end
-		sleep(1/C.fps)
+	catch e 
+		println("Error in polling task:\n$e")
+	finally
+		close(C)
 	end
-	close(C)
 end
 
 function createwindow(width::Int=640, height::Int=480, title::String="SimpleCanvas window")

@@ -5,7 +5,7 @@ export VEC_ORIGIN, VEC_EX, VEC_EY
 export p_to_n, n_to_p
 
 import Base: +,-,*,/,rand
-import LinearAlgebra: norm, dot, inv
+import LinearAlgebra: norm, dot
 
 struct Vec2d
     x::Float32
