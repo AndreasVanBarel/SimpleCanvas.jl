@@ -59,10 +59,10 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	show_fps::Bool
 	diagnostic_level::Int # 0: none, 1: uploads to GPU, 2: + redraws
 	name::String
-	up_minx::Int # These four determine that the submatrix to be updated is contained within
-	up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
-	up_miny::Int 
-	up_maxy::Int
+	# up_minx::Int # These four determine that the submatrix to be updated is contained within
+	# up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
+	# up_miny::Int 
+	# up_maxy::Int
 
     # finalizing (releasing memory when canvas becomes inaccessible)
     function Canvas{T}(args...) where T
@@ -80,8 +80,7 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
     C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
 		0, 0, true, default_updates_immediately, default_fps, 
-		true, default_diagnostic_level, name, 
-		1, size(m)[1], 1, size(m)[2])
+		true, default_diagnostic_level, name)
 
 	# Create OpenGL context
     C.window = createwindow(width, height, name) # Create window
@@ -370,7 +369,7 @@ function setindex!(C::Canvas, V, args...)
 
 	C.update_pending = true
 	if C.updates_immediately
-		t = time_ns()
+		t = time_ns() # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
 		if t > C.next_update
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
 			update!(C)
@@ -421,8 +420,8 @@ function update!(C::Canvas)
 	GLFW.MakeContextCurrent(C.window)
 
 	# reset updating area to none
-	C.up_minx, C.up_miny = size(C.m)
-	C.up_maxx = C.up_maxy = 1
+	# C.up_minx, C.up_miny = size(C.m)
+	# C.up_maxx = C.up_maxy = 1
 
 	to_gpu(C) # pushes data to be updated to the GPU
 	redraw(C) # instructs the GPU to redraw
