@@ -1,10 +1,11 @@
 module SimpleCanvas
 
-export canvas, close, colormap!, name!, diagnostic_level!, target_fps! #, show_fps!
-export vsync!
+export canvas, close, colormap!, name!, windowsize!, windowscale!
+export diagnostic_level!, target_fps! #, show_fps!
 
 # Exported temporarily for development purposes
 export Canvas, to_gpu, map_to_rgb!
+export vsync!
 
 using GLFW
 using ModernGL
@@ -213,7 +214,19 @@ end
 # Setting options 
 function name!(C::Canvas, name::String)
 	C.name = name
-	GLFW.SetWindowTitle(C.window, name);
+	GLFW.MakeContextCurrent(C.window)
+	GLFW.SetWindowTitle(C.window, name)
+end
+
+function windowsize!(C::Canvas, width::Int, height::Int)
+	GLFW.MakeContextCurrent(C.window)
+	GLFW.SetWindowSize(C.window, width, height)
+end
+
+function windowscale!(C::Canvas, scale::Real = 1)
+	width = round(Int, size(C.m)[2]*scale)
+	height = round(Int, size(C.m)[1]*scale)
+	windowsize!(C, width, height)
 end
 
 function diagnostic_level!(C::Canvas, level::Int)

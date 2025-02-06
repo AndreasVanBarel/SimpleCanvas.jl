@@ -51,9 +51,11 @@ colormap!(c, cmap) # c::Canvas
 ### Other options
 
 Given a `Canvas c`:
+ - `name!(c,n)` changes the window name to `n`.
+ - `windowsize!(c,w,h)` sets the window size to `w` by `h`.
+ - `windowscale!(c,scale=1)` sets the window size to the size of the underlying canvas, scaled by `scale`.
  - `target_fps!(c,t)` sets target fps to `t`.
  - `show_fps!(c,true)` shows measured fps in window title. (Available in a future release)
- - `name!(c,n)` changes the window name to `n`.
  - `diagnostic_level!(c,lvl)` shows diagnostic messages. `lvl = 0`: none, `lvl = 1`: only uploads to GPU, `lvl = 2`: also background redraws 
 
 # Notes
