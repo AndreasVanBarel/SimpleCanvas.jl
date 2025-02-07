@@ -1,3 +1,27 @@
+"""
+	SimpleCanvas
+
+A module for drawing contents of a `Matrix` to the screen pixel by pixel.
+
+# Exports
+- `canvas(M::Matrix)`: Creates a `Canvas` for the matrix `M`.
+- `close(C::Canvas)`: Closes `C`, releasing its resources.
+- `colormap!(C::Canvas, colormap::Function)`: Sets the colormap function for `C`.
+- `name!(C::Canvas, name)`: Sets the window name of `C`.
+- `windowsize!(C::Canvas, width, height)`: Sets the window size of `C`.
+- `windowscale!(C::Canvas, scale)`: Scales the window of `C`.
+- `diagnostic_level!(C::Canvas, level)`: Sets the diagnostic level for `C`.
+- `target_fps!(C::Canvas, fps)`: Sets the target frames per second for `C`.
+
+# Examples
+```julia
+using SimpleCanvas
+w,h = 800, 600
+M = zeros(h,w);
+C = canvas(M); # C can be used as if it were a Matrix
+C[101:200, 201:300] .= 1
+```
+"""
 module SimpleCanvas
 
 export canvas, close, colormap!, name!, windowsize!, windowscale!
@@ -11,7 +35,7 @@ using GLFW
 using ModernGL
 using LinearAlgebra
 
-# using Base.Threads
+using Base.Threads
 
 import Base: close
 import Base: show
@@ -96,19 +120,38 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	task = @task polling_task(C)
 	schedule(task)
 	# task = Threads.@spawn polling_task(C) 
+	# task2 = Threads.@spawn basic_polling(C)
     return C
+end
+
+function basic_polling(C::Canvas)
+	try
+		while !GLFW.WindowShouldClose(C.window)
+			try 
+				GLFW.MakeContextCurrent(C.window)
+				GLFW.PollEvents()
+				GLFW.MakeContextCurrent(C_NULL)
+				sleep(1/C.fps)
+			catch e
+				println(" -- Error in inner polling task:\n    $e")
+			end
+		end
+	catch e 
+		println("Error in asynchronous polling task:\n$e")
+	finally
+		close(C)
+	end
 end
 
 function polling_task(C::Canvas)
 	try
 		while !GLFW.WindowShouldClose(C.window)
-			t_start = time_ns()
+			# t_start = time_ns()
 			# did_update = false
-			GLFW.MakeContextCurrent(C.window)
 			# println("Polling task executing... $(C.update_pending), $(time_ns()), $(C.next_update)")
 			isnothing(C.window) && return
 			if C.update_pending == true && time_ns() > C.next_update
-				did_update = true
+				# did_update = true
 				C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
 				update!(C) 
 			else 
@@ -120,6 +163,7 @@ function polling_task(C::Canvas)
 				# 	GLFW.SetWindowTitle(C.window, "$(C.name) @ $(fps)fps ($(C.fps))")
 				# end
 			end
+			GLFW.MakeContextCurrent(C.window)
 			GLFW.PollEvents()
 			err = glGetError()
 			if err != 0
@@ -240,7 +284,7 @@ function diagnostic_level!(C::Canvas, level::Int)
 	C.diagnostic_level = level
 end
 
-function target_fps!(C::Canvas, fps::Number)
+function target_fps!(C::Canvas, fps::Real)
 	C.fps = fps
 end
 
