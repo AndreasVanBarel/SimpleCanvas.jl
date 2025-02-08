@@ -1,7 +1,7 @@
 """
 	SimpleCanvas
 
-A module for drawing contents of a `Matrix` to the screen pixel by pixel.
+A module for drawing to the screen pixel by pixel.
 
 # Exports
 - `canvas(M::Matrix)`: Creates a `Canvas` for the matrix `M`.
@@ -48,8 +48,9 @@ import .GLPrograms
 # Settings
 default_fps = 60
 max_time_fraction = 0.25
-default_diagnostic_level = 0
-default_updates_immediately = true
+default_diagnostic_level = 2
+default_updates_immediately = false
+# for now, updates through threaded polling task only
 
 programs = nothing
 
@@ -61,9 +62,14 @@ function init()
 	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 3);
 	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MINOR, 3);
 	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
-    # GLFW.WindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
+    GLFW.WindowHint(GLFW.OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
 end
 init()
+
+# Detach the current OpenGL context from the calling thread
+function detach_context()
+	GLFW.MakeContextCurrent(GLFW.Window(C_NULL))
+end
 
 mutable struct Canvas{T} <: AbstractMatrix{T}
 	# Core functionality
@@ -74,8 +80,8 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	sprite
 
 	# Timing and update management
-    last_update::UInt64 # last time that update() was called (time at the start of the call)
-	next_update::UInt64 # next time that update() could (and should) be called (set at the end of the previous update() call)
+    last_update::UInt64 # last time that update!() was called (time at the start of the call)
+	next_update::UInt64 # next time that update!() could (and should) be called (set at the end of the previous update!() call)
 	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
 	updates_immediately::Bool
 	fps::Number
@@ -109,28 +115,30 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 
 	# Create OpenGL context
     C.window = createwindow(width, height, name) # Create window
-	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
 	map_to_rgb!(C)
 	tex = C.rgb
 	C.sprite = Sprite(tex) # Create sprite to show in window 
 
+	GLFW.SetFramebufferSizeCallback(C.window, make_framebuffer_size_callback(C))
+	detach_context() # Detach the current OpenGL context from the calling thread
+
 	# Create the polling task
 	# Note: If we don't want the spawned Task to keep the canvas alive, we could use a WeakRef:
 	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
-	task = @task polling_task(C)
-	schedule(task)
-	# task = Threads.@spawn polling_task(C) 
+	# task = @task polling_task(C)
+	# schedule(task)
+	task = Threads.@spawn polling_task2(C) 
 	# task2 = Threads.@spawn basic_polling(C)
     return C
 end
 
 function basic_polling(C::Canvas)
 	try
-		while !GLFW.WindowShouldClose(C.window)
+		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			try 
 				GLFW.MakeContextCurrent(C.window)
 				GLFW.PollEvents()
-				GLFW.MakeContextCurrent(C_NULL)
+				detach_context()
 				sleep(1/C.fps)
 			catch e
 				println(" -- Error in inner polling task:\n    $e")
@@ -145,7 +153,7 @@ end
 
 function polling_task(C::Canvas)
 	try
-		while !GLFW.WindowShouldClose(C.window)
+		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			# t_start = time_ns()
 			# did_update = false
 			# println("Polling task executing... $(C.update_pending), $(time_ns()), $(C.next_update)")
@@ -166,6 +174,7 @@ function polling_task(C::Canvas)
 			GLFW.MakeContextCurrent(C.window)
 			GLFW.PollEvents()
 			err = glGetError()
+			detach_context()
 			if err != 0
 				throw(ErrorException("GL Error code $err"))
 			end
@@ -180,7 +189,45 @@ function polling_task(C::Canvas)
 	catch e 
 		println("Error in polling task:\n$e")
 	finally
+		println("polling task closing C")
 		close(C)
+	end
+	println("polling task finished")
+end
+
+function polling_task2(C::Canvas)
+	GLFW.Init() || @error("GLFW failed to initialize on polling task")
+	try
+		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
+			handle_events(C)
+			# sleep(1/C.fps)
+			sleep(1)
+		end
+	catch e 
+		println("Error in polling task:\n$e")
+	finally
+		println("polling task closing C (C.window = $(C.window))")
+		close(C)
+	end
+	println("polling task finished")
+end
+
+function handle_events(C::Canvas)
+	println("handling events for $(C.name) with window $(C.window)")
+	GLFW.MakeContextCurrent(C.window)
+	if C.update_pending == true && time_ns() > C.next_update
+		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
+		update!(C) 
+	else 
+		C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
+		redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
+	end
+	GLFW.PollEvents()
+	err = glGetError()
+	detach_context()
+	if err != 0
+		# throw(ErrorException("GL Error code $err"))
+		@error "GL Error code $err"
 	end
 end
 
@@ -231,6 +278,7 @@ function gpu_allocate()
 end
 
 function close(C::Canvas)
+	free(C.sprite)
 	isnothing(C.window) && return
     GLFW.SetWindowShouldClose(C.window, true)
     GLFW.DestroyWindow(C.window)
@@ -365,9 +413,9 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 end
 
 function to_gpu(c::Canvas)
-	GLFW.MakeContextCurrent(c.window)
 	textureP = [c.sprite.texture]
 	map_to_rgb!(c)
+	GLFW.MakeContextCurrent(c.window)
 	to_gpu(c.rgb, textureP) 
 end
 
@@ -468,7 +516,7 @@ end
 	
 # 	t = time_ns()
 # 	if t > C.next_update
-# 		update(C)
+# 		update!(C)
 # 	else
 # 		C.update_pending = true
 # 	end
@@ -481,7 +529,6 @@ function update!(C::Canvas)
 	C.update_pending = false
 
 	isnothing(C.window) && return
-	GLFW.MakeContextCurrent(C.window)
 
 	# reset updating area to none
 	# C.up_minx, C.up_miny = size(C.m)
