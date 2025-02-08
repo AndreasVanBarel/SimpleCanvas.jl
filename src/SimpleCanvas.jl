@@ -37,7 +37,7 @@ function init()
 	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 3);
 	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MINOR, 3);
 	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
-    # GLFW.WindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
+    GLFW.WindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
 end
 init()
 
