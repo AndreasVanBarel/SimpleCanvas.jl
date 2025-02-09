@@ -29,7 +29,7 @@ export diagnostic_level!, target_fps! #, show_fps!
 
 # Exported temporarily for development purposes
 export Canvas, to_gpu, map_to_rgb!
-export vsync!
+# export vsync!
 
 using GLFW
 using ModernGL
@@ -136,7 +136,6 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
 	polling_t = @task polling_task(C)
 	schedule(polling_t)
-	detach_context()
 	drawing_t = Threads.@spawn drawing_task(C)
     return C
 end
@@ -158,10 +157,8 @@ function polling_task(C::Canvas)
 	try 
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			try 
-				# GLFW.SwapBuffers(C.window) # This changes the context to the calling thread
 				GLFW.PollEvents()
 				sleep(1/C.fps)
-				detach_context()
 			catch e 
 				println("Error in inner polling task for $(C.name):\n$e")
 			end
@@ -202,8 +199,8 @@ function handle_events(C::Canvas)
 		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
 		update!(C) 
 	else 
-		C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
-		redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
+		# C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
+		# redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
 	end
 	err = glGetError()
 	if err != 0
@@ -290,10 +287,11 @@ function make_framebuffer_size_callback(C)
 	function framebuffer_size_callback(window::GLFW.Window, width, height)
 		# TODO: Wait until the context is available, or somehow push this to the opengl thread
 		println("$(C.name) was resized to $width × $height")
-		GLFW.MakeContextCurrent(window)
-		glViewport(0, 0, width, height);
-		redraw(C)
-		detach_context()
+		# GLFW.MakeContextCurrent(window)
+		# glViewport(0, 0, width, height);
+		# redraw(C)
+		# detach_context()
+		C.update_pending = true
 		return nothing
 	end
 	return framebuffer_size_callback
@@ -304,12 +302,10 @@ end
 # Setting options 
 function name!(C::Canvas, name::String)
 	C.name = name
-	GLFW.MakeContextCurrent(C.window)
 	GLFW.SetWindowTitle(C.window, name)
 end
 
 function windowsize!(C::Canvas, width::Int, height::Int)
-	GLFW.MakeContextCurrent(C.window)
 	GLFW.SetWindowSize(C.window, width, height)
 end
 
@@ -331,10 +327,12 @@ function show_fps!(C::Canvas)
 	C.show_fps = true
 end
 
-function vsync!(C::Canvas, vsync::Bool)
-	GLFW.MakeContextCurrent(C.window)
-	GLFW.SwapInterval(vsync ? 1 : 0)
-end
+# This requires the OpenGL context to be available on the calling thread
+# Currently not supported
+# function vsync!(C::Canvas, vsync::Bool)
+# 	GLFW.MakeContextCurrent(C.window)
+# 	GLFW.SwapInterval(vsync ? 1 : 0)
+# end
 
 ##################
 ## Colormapping ##
