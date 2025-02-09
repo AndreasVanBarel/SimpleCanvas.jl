@@ -68,6 +68,7 @@ end
 Sprite(p::Vec2d,v1::Vec2d,v2::Vec2d,tex) = Sprite(p,p+v1,p+v1+v2,p+v2,tex)
 Sprite(p::Vec2d,tex) = Sprite(p,VEC_EX,VEC_EY,tex)
 Sprite(tex) = Sprite(VEC_ORIGIN,tex)
+free(::Nothing) = nothing
 free(s::Sprite) = glDeleteTextures(1,[s.texture])
 loc(s::Sprite) = s.vertices[2]
 center(s::Sprite) = s.vertices[1]
