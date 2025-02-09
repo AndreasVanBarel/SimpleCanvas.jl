@@ -54,6 +54,10 @@ default_updates_immediately = false
 
 programs = nothing
 
+# Debugging
+const DEBUGGING = true
+debug(x...) = DEBUGGING && println("DEBUG: ", x...)
+
 # Initializes GLFW library
 function init_glfw()
 	GLFW.Init() || @error("GLFW failed to initialize")
@@ -153,27 +157,23 @@ end
 # It might be possible to not do this, at the cost of robustness and compatibility.
 
 function polling_task(C::Canvas)
-	println("started polling task for $(C.name) on thread $(Threads.threadid())")
+	debug("started polling task for $(C.name) on thread $(Threads.threadid())")
 	try 
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
-			try 
-				GLFW.PollEvents()
-				sleep(1/C.fps)
-			catch e 
-				println("Error in inner polling task for $(C.name):\n$e")
-			end
+			GLFW.PollEvents()
+			sleep(1/C.fps)
 		end
 	catch e 
 		println("Error in polling task for $(C.name):\n$e")
 	finally
-		println("polling task closing $(C.name)")
+		debug("polling task closing $(C.name)")
 		close(C)
 	end
-	println("polling task for $(C.name) finished")
+	debug("polling task for $(C.name) finished")
 end
 
 function drawing_task(C::Canvas)
-	println("started drawing task for $(C.name) on thread $(Threads.threadid())")
+	debug("started drawing task for $(C.name) on thread $(Threads.threadid())")
 
 	init_glfw()
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
@@ -188,8 +188,9 @@ function drawing_task(C::Canvas)
 	finally
 		# println("drawing task closing $(C.name)")
 		# close(C)
+		# Not necessary to close the canvas; it will just remain without content, but the window should still be responsive.
 	end
-	println("drawing task for $(C.name) finished")
+	debug("drawing task for $(C.name) finished")
 end
 
 function handle_events(C::Canvas)		
@@ -197,6 +198,8 @@ function handle_events(C::Canvas)
 	GLFW.MakeContextCurrent(C.window)
 	if C.update_pending == true && time_ns() > C.next_update
 		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
+		w,h = GLFW.GetWindowSize(C.window) # get window size
+		glViewport(0, 0, w, h) # In case the window was resized
 		update!(C) 
 	else 
 		# C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
@@ -424,6 +427,7 @@ function setindex!(C::Canvas, V, args...)
 	end
 end
 
+# Requires that the OpenGL context is available on the calling thread
 function update!(C::Canvas)
 	isnothing(C.window) && return
 
@@ -448,6 +452,7 @@ function update!(C::Canvas)
 end
 
 # does not push anything to gpu, just redraws. Is extremely fast (often <10μs)
+# Requires that the OpenGL context is available on the calling thread
 function redraw(C::Canvas)
 	# time_start = time_ns()
 	draw(C.sprite)
