@@ -55,7 +55,7 @@ default_updates_immediately = false
 programs = nothing
 
 # Initializes GLFW library
-function init()
+function init_glfw()
 	GLFW.Init() || @error("GLFW failed to initialize")
 
 	# Specify OpenGL version (Note: MacOSX supports at most OpenGL 4.1)
@@ -64,11 +64,11 @@ function init()
 	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
     GLFW.WindowHint(GLFW.OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
 end
-init()
+init_glfw()
 
-function resetGLFW()
+function reset_glfw()
     GLFW.Terminate()
-    init()
+    init_glfw()
 end
 
 # Detach the current OpenGL context from the calling thread
@@ -136,7 +136,8 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
 	polling_t = @task polling_task(C)
 	schedule(polling_t)
-	# drawing_t = Threads.@spawn drawing_task(C)
+	detach_context()
+	drawing_t = Threads.@spawn drawing_task(C)
     return C
 end
 
@@ -157,12 +158,10 @@ function polling_task(C::Canvas)
 	try 
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			try 
+				# GLFW.SwapBuffers(C.window) # This changes the context to the calling thread
 				GLFW.PollEvents()
-				# err = glGetError()
-				# if err != 0
-				# 	throw(ErrorException("GL Error code $err"))
-				# end
 				sleep(1/C.fps)
+				detach_context()
 			catch e 
 				println("Error in inner polling task for $(C.name):\n$e")
 			end
@@ -179,7 +178,8 @@ end
 function drawing_task(C::Canvas)
 	println("started drawing task for $(C.name) on thread $(Threads.threadid())")
 
-	init()
+	init_glfw()
+	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
 
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
@@ -189,7 +189,7 @@ function drawing_task(C::Canvas)
 	catch e 
 		println("Error in drawing task for $(C.name):\n$e")
 	finally
-		# println("drawing task closing for $(C.name)")
+		# println("drawing task closing $(C.name)")
 		# close(C)
 	end
 	println("drawing task for $(C.name) finished")
@@ -206,10 +206,10 @@ function handle_events(C::Canvas)
 		redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
 	end
 	err = glGetError()
-	detach_context()
 	if err != 0
 		throw(ErrorException("GL Error code $err"))
 	end
+	detach_context()
 end
 
 # Configures the GLFW window and sets the callback functions
