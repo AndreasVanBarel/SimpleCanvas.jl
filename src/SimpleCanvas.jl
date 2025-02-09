@@ -118,8 +118,33 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
 	# resp_task = @task response_task(C)
 	# schedule(resp_task)
-	task = Threads.@spawn :interactive polling_task(C) 
+	# task = Threads.@spawn polling_task(C) 
+	Threads.@spawn temp_create_window(C)
     return C
+end
+
+function temp_create_window(C::Canvas)
+	println("temp: creating window on thread $(Threads.threadid())")
+	
+    GLFW.Init()  # Initialize GLFW
+
+	println("init done")
+    window = GLFW.CreateWindow(800, 600, "GLFW Window")
+	println("window done")
+
+    if window == C_NULL
+        error("Failed to create GLFW window")
+    end
+
+    GLFW.MakeContextCurrent(window)
+
+    while !GLFW.WindowShouldClose(window)
+        GLFW.PollEvents()  # Process events
+        GLFW.SwapBuffers(window)  # Swap front and back buffers
+    end
+
+    GLFW.DestroyWindow(window)
+    GLFW.Terminate()
 end
 
 function response_task(C::Canvas)
