@@ -129,7 +129,7 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 
 	map_to_rgb!(C) # Initializes C.rgb
 	C.sprite = Sprite(C.rgb) 
-	# detach_context() # Detach the current OpenGL context from the calling thread
+	detach_context() # Detach the OpenGL context from this thread
 	
 	# Create the polling task
 	# Note: If we don't want the spawned Task to keep the canvas alive, we could use a WeakRef:
@@ -153,14 +153,12 @@ end
 # It might be possible to not do this, at the cost of robustness and compatibility.
 
 function polling_task(C::Canvas)
-	println("started polling task on thread $(Threads.threadid())")
+	println("started polling task for $(C.name) on thread $(Threads.threadid())")
 	try 
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			try 
-				GLFW.MakeContextCurrent(C.window)
 				GLFW.PollEvents()
 				# err = glGetError()
-				detach_context()
 				# if err != 0
 				# 	throw(ErrorException("GL Error code $err"))
 				# end
@@ -170,16 +168,16 @@ function polling_task(C::Canvas)
 			end
 		end
 	catch e 
-		println("Error in polling task:\n$e")
+		println("Error in polling task for $(C.name):\n$e")
 	finally
-		println("polling task closing C")
+		println("polling task closing $(C.name)")
 		close(C)
 	end
-	println("polling task finished")
+	println("polling task for $(C.name) finished")
 end
 
 function drawing_task(C::Canvas)
-	println("started drawing task on thread $(Threads.threadid())")
+	println("started drawing task for $(C.name) on thread $(Threads.threadid())")
 
 	init()
 
@@ -194,7 +192,7 @@ function drawing_task(C::Canvas)
 		# println("drawing task closing for $(C.name)")
 		# close(C)
 	end
-	println("drawing task finished")
+	println("drawing task for $(C.name) finished")
 end
 
 function handle_events(C::Canvas)		
@@ -207,7 +205,6 @@ function handle_events(C::Canvas)
 		C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
 		redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
 	end
-	GLFW.PollEvents()
 	err = glGetError()
 	detach_context()
 	if err != 0
@@ -221,9 +218,9 @@ function configure_window(C::Canvas)
 	window = C.window
 
 	# Callback functions
-	error_callback(x...) = println("Error callback: $(x)")
-	key_callback(window, key, scancode, action, mods) = println("Key callback: $(key), $(scancode), $(action), $(mods)")
-	mouse_button_callback(window, button, action, mods) = println("Mouse button callback: $(button), $(action), $(mods)")
+	error_callback(x...) = println("$(C.name): GLFW Error callback: $(x)")
+	key_callback(window, key, scancode, action, mods) = println("$(C.name): Key action: $(key), $(scancode), $(action), $(mods)")
+	mouse_button_callback(window, button, action, mods) = println("$(C.name): Mouse button action: $(button), $(action), $(mods)")
 	GLFW.SetErrorCallback(error_callback)
 	GLFW.SetKeyCallback(window, key_callback)
 	GLFW.SetMouseButtonCallback(window, mouse_button_callback)
@@ -292,7 +289,7 @@ end
 function make_framebuffer_size_callback(C)
 	function framebuffer_size_callback(window::GLFW.Window, width, height)
 		# TODO: Wait until the context is available, or somehow push this to the opengl thread
-		println("The window was resized to $width × $height")
+		println("$(C.name) was resized to $width × $height")
 		GLFW.MakeContextCurrent(window)
 		glViewport(0, 0, width, height);
 		redraw(C)
