@@ -47,10 +47,10 @@ import .GLPrograms
 
 # Settings
 default_fps = 60
-default_diagnostic_level = 0
+default_diagnostic_level = 1
 default_show_fps = true
 default_updates_immediately = true
-max_time_fraction = 0.25
+max_time_fraction = 1.0
 
 programs = nothing
 
@@ -149,6 +149,111 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
     return C
 end
 
+
+###################
+# Initializations #
+###################
+
+# Configures the GLFW window and sets the callback functions
+# This does not require the openGL context 
+function configure_window(C::Canvas)
+	window = C.window
+
+	# Callback functions
+	error_callback(x...) = @error("$(C.name): GLFW Error callback:\n$x")
+	key_callback(window, key, scancode, action, mods) = debug("$(C.name): Key action: $(key), $(scancode), $(action), $(mods)")
+	mouse_button_callback(window, button, action, mods) = debug("$(C.name): Mouse button action: $(button), $(action), $(mods)")
+	GLFW.SetErrorCallback(error_callback)
+	GLFW.SetKeyCallback(window, key_callback)
+	GLFW.SetMouseButtonCallback(window, mouse_button_callback)
+	GLFW.SetFramebufferSizeCallback(window, make_framebuffer_size_callback(C))
+end
+
+# Configures the OpenGL context associated to the given window
+# Requires that the context is available on the calling thread
+function configure_context(C::Canvas)
+	window = C.window
+	width, height = get_width(C), get_height(C)
+
+	GLFW.MakeContextCurrent(window) # Make the window's context current
+
+	glViewport(0, 0, width, height)
+	GLFW.SwapInterval(0) #Activate V-sync (not necessary since we are using sleep in the polling task)
+
+    # Shader programs
+	global programs = GLPrograms.generatePrograms() # Compile the shader programs
+	glUseProgram(programs.sprite); glUniformMatrix3fv(programs.sprite_camLoc, 1, false, Matrix{Float32}(I,3,3)); # Set Camera values on the gpu
+
+	gpu_allocate() # Allocate buffers on the GPU	
+end
+
+# TODO: Should probably move to Sprite.jl. It requires an OpenGL context though.
+sprite_vao = UInt32(0)
+sprite_vbo = UInt32(0)
+function gpu_allocate()
+	### sprite ###
+	vaoP = UInt32[0] # Vertex Array Object
+	glGenVertexArrays(1, vaoP)
+	glBindVertexArray(vaoP[1])
+
+	vboP = UInt32[0] # Vertex Buffer Object
+	glGenBuffers(1,vboP)
+	glBindBuffer(GL_ARRAY_BUFFER, vboP[1])
+
+	#Specifiy the interpretation of the data
+	glEnableVertexAttribArray(0)
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5*sizeof(Float32), Ptr{Nothing}(0))
+	glEnableVertexAttribArray(1)
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5*sizeof(Float32), Ptr{Nothing}(3*sizeof(Float32)))
+
+	global sprite_vao = vaoP[1]
+	global sprite_vbo = vboP[1]
+end
+
+function close(C::Canvas)
+	C.updates_immediately = false # Prevents unnecessary yields to a drawing task that will close anyway
+	free(C.sprite)
+	isnothing(C.window) && return
+    GLFW.SetWindowShouldClose(C.window, true)
+    GLFW.DestroyWindow(C.window)
+	C.window = nothing
+    return
+end
+
+function make_framebuffer_size_callback(C)
+	function framebuffer_size_callback(window::GLFW.Window, width, height)
+		debug("$(C.name) was resized to $width × $height")
+		C.update_pending = true
+		return
+	end
+	return framebuffer_size_callback
+end
+
+
+###############################
+# General functions on Canvas #
+###############################
+
+function show(io::IO, C::Canvas) 
+    println(io, "$(typeof(C)) named '$(C.name)'")
+    show(io, C.m)
+end
+
+function show(io::IO, mime::MIME"text/plain", C::Canvas)
+    println(io, "$(typeof(C)) named '$(C.name)'")
+    show(io, mime, C.m)
+end
+
+function actual_fps(C::Canvas)
+	Δupdate = C.next_update - C.last_update
+	return round(Int, Δupdate == 0 ? C.fps : 1e9/Δupdate)
+end
+
+
+#########
+# Tasks #
+#########
+
 # Notes:
 # Two tasks are needed:
 # 1. Main thread task (named polling_task)
@@ -236,95 +341,17 @@ function update_draw(C::Canvas)
 	return 
 end
 
-function actual_fps(C::Canvas)
-	Δupdate = C.next_update - C.last_update
-	return round(Int, Δupdate == 0 ? C.fps : 1e9/Δupdate)
-end
-
-
-
-# Configures the GLFW window and sets the callback functions
-# This does not require the openGL context 
-function configure_window(C::Canvas)
-	window = C.window
-
-	# Callback functions
-	error_callback(x...) = @error("$(C.name): GLFW Error callback:\n$x")
-	key_callback(window, key, scancode, action, mods) = debug("$(C.name): Key action: $(key), $(scancode), $(action), $(mods)")
-	mouse_button_callback(window, button, action, mods) = debug("$(C.name): Mouse button action: $(button), $(action), $(mods)")
-	GLFW.SetErrorCallback(error_callback)
-	GLFW.SetKeyCallback(window, key_callback)
-	GLFW.SetMouseButtonCallback(window, mouse_button_callback)
-	GLFW.SetFramebufferSizeCallback(window, make_framebuffer_size_callback(C))
-end
-
-# Configures the OpenGL context associated to the given window
-# Requires that the context is available on the calling thread
-function configure_context(C::Canvas)
-	window = C.window
-	width, height = get_width(C), get_height(C)
-
-	GLFW.MakeContextCurrent(window) # Make the window's context current
-
-	glViewport(0, 0, width, height)
-	GLFW.SwapInterval(0) #Activate V-sync (not necessary since we are using sleep in the polling task)
-
-    # Shader programs
-	global programs = GLPrograms.generatePrograms() # Compile the shader programs
-	glUseProgram(programs.sprite); glUniformMatrix3fv(programs.sprite_camLoc, 1, false, Matrix{Float32}(I,3,3)); # Set Camera values on the gpu
-
-	gpu_allocate() # Allocate buffers on the GPU	
-end
-
-# TODO: Should probably move to Sprite.jl. It requires an OpenGL context though.
-sprite_vao = UInt32(0)
-sprite_vbo = UInt32(0)
-function gpu_allocate()
-	### sprite ###
-	vaoP = UInt32[0] # Vertex Array Object
-	glGenVertexArrays(1, vaoP)
-	glBindVertexArray(vaoP[1])
-
-	vboP = UInt32[0] # Vertex Buffer Object
-	glGenBuffers(1,vboP)
-	glBindBuffer(GL_ARRAY_BUFFER, vboP[1])
-
-	#Specifiy the interpretation of the data
-	glEnableVertexAttribArray(0)
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5*sizeof(Float32), Ptr{Nothing}(0))
-	glEnableVertexAttribArray(1)
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5*sizeof(Float32), Ptr{Nothing}(3*sizeof(Float32)))
-
-	global sprite_vao = vaoP[1]
-	global sprite_vbo = vboP[1]
-end
-
-function close(C::Canvas)
-	C.updates_immediately = false # Prevents unnecessary yields to a drawing task that will close anyway
-	free(C.sprite)
-	isnothing(C.window) && return
-    GLFW.SetWindowShouldClose(C.window, true)
-    GLFW.DestroyWindow(C.window)
-	C.window = nothing
-    return
-end
-
-function show(io::IO, C::Canvas) 
-    println(io, "$(typeof(C)) named '$(C.name)'")
-    show(io, C.m)
-end
-function show(io::IO, mime::MIME"text/plain", C::Canvas)
-    println(io, "$(typeof(C)) named '$(C.name)'")
-    show(io, mime, C.m)
-end
-
-function make_framebuffer_size_callback(C)
-	function framebuffer_size_callback(window::GLFW.Window, width, height)
-		debug("$(C.name) was resized to $width × $height")
-		C.update_pending = true
-		return
+@inline function mark_for_update(C::Canvas)
+	C.update_pending = true
+	if C.updates_immediately
+		t = time_ns()
+		if t > C.next_update
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': yielded")
+			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
+			# println("Yielding to drawing task")
+			yield()
+		end
 	end
-	return framebuffer_size_callback
 end
 
 
@@ -396,15 +423,7 @@ end
 
 function colormap!(C::Canvas, colormap::Function)
 	C.colormap = colormap
-	C.update_pending = true
-	if C.updates_immediately
-		t = time_ns()
-		if t > C.next_update
-			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': yielded by colormap!")
-			# update!(C)
-			yield()
-		end
-	end
+	mark_for_update(C)
 end
 
 
@@ -420,16 +439,7 @@ getindex(C::Canvas, args...) = getindex(C.m, args...)
 ### General indexing support
 function setindex!(C::Canvas, V, args...)
 	setindex!(C.m, V, args...) # update CPU
-
-	C.update_pending = true
-	if C.updates_immediately
-		t = time_ns() # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
-		if t > C.next_update
-			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': yielded by setindex!")
-			# update!(C)
-			yield()
-		end
-	end
+	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
 end
 
 
