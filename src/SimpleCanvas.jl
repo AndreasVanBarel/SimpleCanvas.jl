@@ -322,7 +322,6 @@ function drawing_task(C::Canvas)
 end
 
 function update_draw(C::Canvas)		
-	# println("draw_on_gpu for $(C.name) with window $(C.window)")
 	GLFW.MakeContextCurrent(C.window)
 	if C.update_pending == true
 		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
@@ -480,29 +479,13 @@ function update!(C::Canvas)
 
 	to_gpu(C) # pushes data to be updated to the GPU
 	redraw(C) # instructs the GPU to redraw
-
-	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
-	# t = time_ns()
-	# update_time_elapsed = t - C.last_update
-	# if update_time_elapsed > 1e9/C.fps*max_time_fraction
-	# 	C.next_update = C.last_update + round(UInt64, update_time_elapsed/max_time_fraction)
-	# else 
-	# 	C.next_update = C.last_update + round(UInt64, 1e9/C.fps)
-	# end
-	# if C.diagnostic_level >= 1
-	# 	Δupdate = C.next_update - C.last_update
-	# 	println("Canvas '$(C.name)': updated in $(1e-9update_time_elapsed)s, next in $(1e-9(C.next_update-t))s ($(round(Int,1e9/Δupdate)) fps)")
-	# end
 end
 
 # does not push anything to gpu, just redraws. Is extremely fast (often <10μs)
 # Requires that the OpenGL context is available on the calling thread
 function redraw(C::Canvas)
-	# time_start = time_ns()
 	draw(C.sprite)
 	GLFW.SwapBuffers(C.window)
-	# Δt = time_ns() - time_start
-	# println("Redraw took $(1e-9Δt)s ($(round(Int,1e9/Δt)) fps)")
 end
 
 # Linear indices support
