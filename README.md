@@ -60,7 +60,8 @@ Given a `Canvas c`:
 
 # Notes
 
-- Do not edit the fields of a `Canvas` directly, i.e., use provided functions such as `colormap!` instead of editing `c.colormap`.
+- Do not edit the fields of a `Canvas` directly. E.g., use `colormap!` instead of editing `c.colormap`.
+- Support for MacOSX is experimental.
 - Support for multiple simultaneous canvases is experimental.
 
 
