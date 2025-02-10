@@ -25,7 +25,7 @@ C[101:200, 201:300] .= 1
 module SimpleCanvas
 
 export canvas, close, colormap!, name!, windowsize!, windowscale!
-export diagnostic_level!, target_fps! #, show_fps!
+export diagnostic_level!, target_fps!, show_fps!
 
 # Exported temporarily for development purposes
 export Canvas, to_gpu, map_to_rgb!
@@ -48,7 +48,8 @@ import .GLPrograms
 # Settings
 default_fps = 60
 max_time_fraction = 1.0
-default_diagnostic_level = 1
+default_diagnostic_level = 0
+default_show_fps = false
 default_updates_immediately = false
 # for now, updates through threaded polling task only
 
@@ -118,7 +119,7 @@ get_height(C::Canvas) = size(C.m)[1]
 # such that Canvas{T}(w,h) creates a canvas of size w×h
 canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1]; name = "Simple Canvas")
 function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::String) where T 
-	@debug "Creating canvas for matrix on thread $(Threads.threadid())"
+	debug("Creating canvas for matrix on thread $(Threads.threadid())")
 	m = collect(m)::Matrix{T} # Ensures that the matrix is copied and stored in a contiguous block of memory
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
     C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
@@ -140,7 +141,7 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	# Cref = WeakRef(C) # This reference does not prevent the canvas from being garbage collected
 	polling_t = @task polling_task(C)
 	schedule(polling_t)
-	drawing_t = Threads.@spawn drawing_task(C)
+	drawing_t = Threads.@spawn :interactive drawing_task(C)
     return C
 end
 
@@ -152,7 +153,7 @@ end
 # 2. Separate thread task (named drawing_task)
 #    All openGL calls etc
 #    Does the copying of the matrix to the GPU
-#
+
 # The reason is that GLFW window and OS related tasks must be done on the main thread.
 # It might be possible to not do this, at the cost of robustness and compatibility.
 
@@ -161,6 +162,12 @@ function polling_task(C::Canvas)
 	try 
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			GLFW.PollEvents()
+			if C.show_fps
+				fps = round(Int, C.fps)
+				GLFW.SetWindowTitle(C.window, "$(C.name) - $(fps) fps") # TODO: fix this to show actual fps
+			else
+				GLFW.SetWindowTitle(C.window, C.name)
+			end
 			sleep(1/C.fps)
 		end
 	catch e 
@@ -180,8 +187,13 @@ function drawing_task(C::Canvas)
 
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
-			handle_events(C)
-			sleep(1/C.fps)
+			update_was_pending = C.update_pending
+			t = time_ns()
+			draw_on_gpu(C)
+			Δt = time_ns() - t
+			wait_time_s = max(1/C.fps - Δt*1e-9, 0.0)
+			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent)")
+			sleep(wait_time_s)
 		end
 	catch e 
 		println("Error in drawing task for $(C.name):\n$e")
@@ -193,14 +205,15 @@ function drawing_task(C::Canvas)
 	debug("drawing task for $(C.name) finished")
 end
 
-function handle_events(C::Canvas)		
-	# println("handling events for $(C.name) with window $(C.window)")
+function draw_on_gpu(C::Canvas)		
+	# println("draw_on_gpu for $(C.name) with window $(C.window)")
 	GLFW.MakeContextCurrent(C.window)
-	if C.update_pending == true && time_ns() > C.next_update
+	if C.update_pending == true
 		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
 		w,h = GLFW.GetWindowSize(C.window) # get window size
 		glViewport(0, 0, w, h) # In case the window was resized
 		update!(C) 
+		t = time_ns()
 	else 
 		# C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
 		# redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
@@ -210,6 +223,7 @@ function handle_events(C::Canvas)
 		throw(ErrorException("GL Error code $err"))
 	end
 	detach_context()
+	return 
 end
 
 # Configures the GLFW window and sets the callback functions
@@ -269,6 +283,7 @@ function gpu_allocate()
 end
 
 function close(C::Canvas)
+	C.updates_immediately = false # Prevents unnecessary yields to a drawing task that will close anyway
 	free(C.sprite)
 	isnothing(C.window) && return
     GLFW.SetWindowShouldClose(C.window, true)
@@ -300,9 +315,11 @@ function make_framebuffer_size_callback(C)
 	return framebuffer_size_callback
 end
 
-##################
 
-# Setting options 
+#############
+## Options ##
+#############
+
 function name!(C::Canvas, name::String)
 	C.name = name
 	GLFW.SetWindowTitle(C.window, name)
@@ -336,6 +353,7 @@ end
 # 	GLFW.MakeContextCurrent(C.window)
 # 	GLFW.SwapInterval(vsync ? 1 : 0)
 # end
+
 
 ##################
 ## Colormapping ##
@@ -371,10 +389,37 @@ function colormap!(C::Canvas, colormap::Function)
 		t = time_ns()
 		if t > C.next_update
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setcolormap)")
-			update!(C)
+			# update!(C)
+			yield()
 		end
 	end
 end
+
+
+###################################
+## Matrix operations on a Canvas ##
+###################################
+
+size(C::Canvas)	= size(C.m)
+length(C::Canvas) = length(C.m)	
+axes(C::Canvas) = axes(C.m)	
+getindex(C::Canvas, args...) = getindex(C.m, args...)
+
+### General indexing support
+function setindex!(C::Canvas, V, args...)
+	setindex!(C.m, V, args...) # update CPU
+
+	C.update_pending = true
+	if C.updates_immediately
+		t = time_ns() # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
+		if t > C.next_update
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
+			# update!(C)
+			yield()
+		end
+	end
+end
+
 
 ################################
 ## Updating GPU mirror matrix ##
@@ -404,29 +449,6 @@ function to_gpu(c::Canvas)
 	to_gpu(c.rgb, textureP) 
 end
 
-###################################
-## Matrix operations on a Canvas ##
-###################################
-
-size(C::Canvas)	= size(C.m)
-length(C::Canvas) = length(C.m)	
-axes(C::Canvas) = axes(C.m)	
-getindex(C::Canvas, args...) = getindex(C.m, args...)
-
-### General indexing support
-function setindex!(C::Canvas, V, args...)
-	setindex!(C.m, V, args...) # update CPU
-
-	C.update_pending = true
-	if C.updates_immediately
-		t = time_ns() # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
-		if t > C.next_update
-			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by setindex!)")
-			update!(C)
-		end
-	end
-end
-
 # Requires that the OpenGL context is available on the calling thread
 function update!(C::Canvas)
 	isnothing(C.window) && return
@@ -437,7 +459,7 @@ function update!(C::Canvas)
 	to_gpu(C) # pushes data to be updated to the GPU
 	redraw(C) # instructs the GPU to redraw
 
-	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most 50pct of the time goes to the canvas update. If the update takes longer than half the frame time, we allow the caller at least that same amount of time. The target fps will then not be reached.
+	# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
 	t = time_ns()
 	update_time_elapsed = t - C.last_update
 	if update_time_elapsed > 1e9/C.fps*max_time_fraction
@@ -447,7 +469,7 @@ function update!(C::Canvas)
 	end
 	if C.diagnostic_level >= 1
 		Δupdate = C.next_update - C.last_update
-		println("Canvas '$(C.name)': updated in $(1e-9update_time_elapsed)s, next in $(1e-9update_time_elapsed)s ($(round(Int,1e9/Δupdate)) fps)")
+		println("Canvas '$(C.name)': updated in $(1e-9update_time_elapsed)s, next in $(1e-9(C.next_update-t))s ($(round(Int,1e9/Δupdate)) fps)")
 	end
 end
 
