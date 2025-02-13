@@ -103,10 +103,6 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	show_fps::Bool
 	diagnostic_level::Int # 0: none, 1: uploads to GPU, 2: + redraws
 	name::String
-	# up_minx::Int # These four determine that the submatrix to be updated is contained within
-	# up_maxx::Int # m[up_minx:up_maxx, up_miny:up_maxy]
-	# up_miny::Int 
-	# up_maxy::Int
 
     # finalizing (releasing memory when canvas becomes inaccessible)
     function Canvas{T}(args...) where T
@@ -487,92 +483,5 @@ function redraw(C::Canvas)
 	draw(C.sprite)
 	GLFW.SwapBuffers(C.window)
 end
-
-# Linear indices support
-# function setindex!(C::Canvas, val, ind) 
-# 	i = CartesianIndices(C.m)[ind]
-# 	setindex!(C, val, i)
-# end
-# function setindex!(C::Canvas, val, inds::Vector{CartesianIndex})
-# 	if length(val) != length(inds); C.m[inds] = val; end # this will error appropriately
-# 	for i in eachindex(1:length(inds))
-# 		setindex!(C, val[i], inds[i])
-# 	end
-# end
-# function setindex!(C::Canvas, val, ind::CartesianIndex)
-# 	setindex!(C, val, ind.I[1], ind.I[2])
-# end
-
-# function setindex!(C::Canvas, val, i::Number, j::Number) # single value
-# 	setindex!(C, [val], [i], [j])
-# end
-
-# Uploads texture tex to subarray (x,y) -> (x+w-1, y+w-1) of texture at address textureP[1] on GPU
-# function to_gpu(tex::Array{UInt8,3}, textureP, x, y, w, h) 
-#     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
-#     isrgba = size(tex)[1]==4
-
-# 	println("$x $y $w $h")
-
-# 	glBindTexture(GL_TEXTURE_2D, textureP[1])
-# 	if isrgba #rgba
-# 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tex)
-# 	else #rgb
-# 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGB, GL_UNSIGNED_BYTE, tex)
-# 	end
-# 	# glGenerateMipmap(GL_TEXTURE_2D)
-# 	glFinish()
-# end
-
-# function to_gpu_sub(C::Canvas)
-# 	GLFW.MakeContextCurrent(C.window)
-# 	textureP = [C.sprite.texture]
-# 	tex = map_to_rgb(C, C.up_minx:C.up_maxx, C.up_miny:C.up_maxy) # 1x1 array with the corresponding pixel in it
-# 	x = C.up_minx -1
-# 	y = C.up_miny -1
-# 	w = C.up_maxx - C.up_minx + 1
-# 	h = C.up_maxy - C.up_miny + 1
-# 	to_gpu(tex, textureP, x, y, w, h) 
-# end
-
-### Experimental detailed indexing support
-# function setindex!(C::Canvas, val, ind)
-# 	@error("Linear indexing operation setindex!(::Canvas, $val, $inds) is not yet supported.")
-# end
-
-# setindex!(C::Canvas, V, ::Colon, Y) = setindex!(C,V,1:size(C.m)[1],Y)
-# setindex!(C::Canvas, V, X, ::Colon) = setindex!(C,V,X,1:size(C.m)[2])
-# setindex!(C::Canvas, V, ::Colon, ::Colon) = setindex!(C,V,1:size(C.m)[1],1:size(C.m)[2])
-
-# function setindex!(C::Canvas, V, X, Y) # set V as submatrix of C at location X × Y
-# 	# println("setindex! called with args $V, $X, $Y")
-
-# 	if X === Colon(); X = 1:size(C.m)[1]; end
-# 	if Y === Colon(); Y = 1:size(C.m)[2]; end
-
-# 	minx, maxx = extrema(X)
-# 	miny, maxy = extrema(Y)
-
-# 	C.up_minx = min(C.up_minx, minx)
-# 	C.up_maxx = max(C.up_maxx, maxx)
-# 	C.up_miny = min(C.up_miny, miny)
-# 	C.up_maxy = max(C.up_maxy, maxy)
-
-# 	setindex!(C.m, V, X, Y)		
-	
-# 	t = time_ns()
-# 	if t > C.next_update
-# 		update!(C)
-# 	else
-# 		C.update_pending = true
-# 	end
-# end
-
-# function update_pixel(C::Canvas, xp::Int, yp::Int)
-# 	C.update_pending = false
-# 	C.last_update = time_ns()
-# 	# println("update pixel called")
-# 	to_gpu(C, xp, yp) # should only happen on write to c.m
-# end
 
 end
