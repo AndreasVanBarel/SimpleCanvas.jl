@@ -55,7 +55,7 @@ max_time_fraction = 1.0
 programs = nothing
 
 # Debugging
-const DEBUGGING = false
+DEBUGGING = false
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 # Initializes GLFW library
@@ -87,6 +87,7 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
+	waking_cond # Condition for waking up the drawing task
 
 	# Tasks
 	polling_task
@@ -121,7 +122,8 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	debug("Creating canvas for matrix on thread $(Threads.threadid())")
 	m = collect(m)::Matrix{T} # Ensures that the matrix is copied and stored in a contiguous block of memory
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, 
+	waking_cond = Threads.Condition()
+    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, waking_cond,
 		nothing, nothing,
 		0, 0, true, default_updates_immediately, default_fps, 
 		default_show_fps, default_diagnostic_level, name)
@@ -284,11 +286,35 @@ function polling_task(C::Canvas)
 	debug("polling task for $(C.name) finished")
 end
 
+@inline function try_notify(cond)
+    lock(cond)
+    try
+        notify(cond)
+    finally
+        unlock(cond)
+    end
+end
+
+@inline function try_wait(cond)
+	lock(cond)
+	try
+		wait(cond)
+	finally
+		unlock(cond)
+	end
+end
+
+function wait_notify(cond, timeout)
+	Timer(x->try_notify(cond), timeout)
+end
+
 function drawing_task(C::Canvas)
 	debug("started drawing task for $(C.name) on thread $(Threads.threadid())")
 
 	init_glfw()
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
+
+	# Generate the timed waking condition
 
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
@@ -298,14 +324,17 @@ function drawing_task(C::Canvas)
 			Δt = time_ns() - t
 			wait_time_s = max(1/C.fps - Δt*1e-9, 0.0)
 			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent)")
-			sleep(wait_time_s)
 		
-			# In case the update took a long time, we need to provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
+			# In case the update took a long time, we provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
 			if Δt > 1e9/C.fps*max_time_fraction
 				C.next_update = t + round(UInt64, Δt/max_time_fraction)
 			else 
 				C.next_update = t + round(UInt64, 1e9/C.fps)
 			end
+			update_was_pending && debug("Next update for $(C.name) at $(C.next_update)")
+
+			# sleep(wait_time_s)
+			try_wait(C.waking_cond)
 		end
 	catch e 
 		@error("Drawing task for $(C.name):\n$e")
@@ -341,10 +370,10 @@ end
 	if C.updates_immediately
 		t = time_ns()
 		if t > C.next_update
-			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': yielded")
+			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': notified drawing task (by mark_for_update)")
 			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
 			# println("Yielding to drawing task")
-			yield()
+			try_notify(C.waking_cond)
 		end
 	end
 end
@@ -397,8 +426,11 @@ end
 function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
 	# NOTE: The colormap is passed as an argument such that the Julia compiler would specialize on it!
 
+	# ptr_m = pointer(C.m)
 	for i in CartesianIndices(C.m)
 		v = C.m[i]
+		# lin_index = LinearIndices(C.m)[i]
+		# v = unsafe_load(ptr_m, lin_index)
 		color = colormap(v)::NTuple{3,UInt8}
 		C.rgb[1,i] = color[1]
 		C.rgb[2,i] = color[2]
