@@ -50,12 +50,12 @@ default_fps = 60
 default_diagnostic_level = 0
 default_show_fps = true
 default_updates_immediately = true
-max_time_fraction = 0.25
+max_time_fraction = 0.99
 
 programs = nothing
 
 # Debugging
-DEBUGGING = true
+DEBUGGING = false
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 # Initializes GLFW library
@@ -87,11 +87,11 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
-	waking_cond # Condition for waking up the drawing task
 
 	# Tasks
 	polling_task
 	drawing_task
+	drawing_cond # Condition for waking up the drawing task
 
 	# Timing and update management
     last_update::UInt64 # last time that update!() was called (time at the start of the call)
@@ -122,9 +122,9 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	debug("Creating canvas for matrix on thread $(Threads.threadid())")
 	m = collect(m)::Matrix{T} # Ensures that the matrix is copied and stored in a contiguous block of memory
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
-	waking_cond = Threads.Condition()
-    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing, waking_cond,
-		nothing, nothing,
+	drawing_cond = Threads.Condition()
+    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing,
+		nothing, nothing, drawing_cond,
 		0, 0, true, default_updates_immediately, default_fps, 
 		default_show_fps, default_diagnostic_level, name)
 		
@@ -286,35 +286,12 @@ function polling_task(C::Canvas)
 	debug("polling task for $(C.name) finished")
 end
 
-@inline function try_notify(cond)
-    lock(cond)
-    try
-        notify(cond)
-    finally
-        unlock(cond)
-    end
-end
-
-@inline function try_wait(cond)
-	lock(cond)
-	try
-		wait(cond)
-	finally
-		unlock(cond)
-	end
-end
-
-function create_notify_timer(cond, timeout)
-	return Timer(x->try_notify(cond), timeout)
-end
-
 function drawing_task(C::Canvas)
 	debug("started drawing task for $(C.name) on thread $(Threads.threadid())")
 
 	init_glfw()
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
 
-	# Generate the timed waking condition
 	timer = nothing 
 
 	try
@@ -336,9 +313,9 @@ function drawing_task(C::Canvas)
 			C.next_update = t + Δnext_update
 			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
 
-			timer = create_notify_timer(C.waking_cond, (Δnext_update - Δt)*1e-9)
+			timer = create_notify_timer(C.drawing_cond, (Δnext_update - Δt)*1e-9)
 			# sleep(wait_time_s)
-			try_wait(C.waking_cond)
+			try_wait(C.drawing_cond)
 			close(timer)
 		end
 	catch e 
@@ -375,12 +352,35 @@ end
 	if C.updates_immediately
 		t = time_ns()
 		if t > C.next_update
+			# println("Yielding to drawing task, t-C.next_update = $(1e-9(t-C.next_update))")
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': notified drawing task (by mark_for_update)")
 			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
-			println("Yielding to drawing task, C.next_update = $(t-C.next_update)")
-			try_notify(C.waking_cond)
+			try_notify(C.drawing_cond)
+			yield() 
 		end
 	end
+end
+
+@inline function try_notify(cond)
+    lock(cond)
+    try
+        notify(cond)
+    finally
+        unlock(cond)
+    end
+end
+
+@inline function try_wait(cond)
+	lock(cond)
+	try
+		wait(cond)
+	finally
+		unlock(cond)
+	end
+end
+
+function create_notify_timer(cond, timeout)
+	return Timer(x->try_notify(cond), timeout)
 end
 
 
