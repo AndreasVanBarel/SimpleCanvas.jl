@@ -291,7 +291,6 @@ function drawing_task(C::Canvas)
 
 	init_glfw()
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
-
 	timer = nothing 
 
 	try
@@ -314,16 +313,11 @@ function drawing_task(C::Canvas)
 			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
 
 			timer = create_notify_timer(C.drawing_cond, (Δnext_update - Δt)*1e-9)
-			# sleep(wait_time_s)
 			try_wait(C.drawing_cond)
 			close(timer)
 		end
 	catch e 
 		@error("Drawing task for $(C.name):\n$e")
-	# finally
-		# println("drawing task closing $(C.name)")
-		# close(C)
-		# Not necessary to close the canvas; it will just remain without content, but the window should still be responsive.
 	end
 	debug("drawing task for $(C.name) finished")
 end
@@ -335,9 +329,6 @@ function update_draw(C::Canvas)
 		w,h = GLFW.GetWindowSize(C.window) # get window size
 		glViewport(0, 0, w, h) # In case the window was resized
 		update!(C) 
-	else 
-		# C.diagnostic_level >= 2 && println("Canvas '$(C.name)': redraw (initiated by polling task)")
-		# redraw(C) # Redraws the canvas if no update is pending; this ensures the window is responsive
 	end
 	err = glGetError()
 	if err != 0
