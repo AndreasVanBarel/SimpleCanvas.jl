@@ -47,15 +47,15 @@ import .GLPrograms
 
 # Settings
 default_fps = 60
-default_diagnostic_level = 1
+default_diagnostic_level = 0
 default_show_fps = true
 default_updates_immediately = true
-max_time_fraction = 1.0
+max_time_fraction = 0.25
 
 programs = nothing
 
 # Debugging
-DEBUGGING = false
+DEBUGGING = true
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 # Initializes GLFW library
@@ -304,8 +304,8 @@ end
 	end
 end
 
-function wait_notify(cond, timeout)
-	Timer(x->try_notify(cond), timeout)
+function create_notify_timer(cond, timeout)
+	return Timer(x->try_notify(cond), timeout)
 end
 
 function drawing_task(C::Canvas)
@@ -315,26 +315,31 @@ function drawing_task(C::Canvas)
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
 
 	# Generate the timed waking condition
+	timer = nothing 
 
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			update_was_pending = C.update_pending
 			t = time_ns()
 			update_draw(C)
-			Δt = time_ns() - t
+			t_end = time_ns()
+			Δt = t_end - t
 			wait_time_s = max(1/C.fps - Δt*1e-9, 0.0)
 			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent)")
 		
 			# In case the update took a long time, we provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
 			if Δt > 1e9/C.fps*max_time_fraction
-				C.next_update = t + round(UInt64, Δt/max_time_fraction)
+				Δnext_update = round(UInt64, Δt/max_time_fraction)
 			else 
-				C.next_update = t + round(UInt64, 1e9/C.fps)
+				Δnext_update = round(UInt64, 1e9/C.fps)
 			end
-			update_was_pending && debug("Next update for $(C.name) at $(C.next_update)")
+			C.next_update = t + Δnext_update
+			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
 
+			timer = create_notify_timer(C.waking_cond, (Δnext_update - Δt)*1e-9)
 			# sleep(wait_time_s)
 			try_wait(C.waking_cond)
+			close(timer)
 		end
 	catch e 
 		@error("Drawing task for $(C.name):\n$e")
@@ -372,7 +377,7 @@ end
 		if t > C.next_update
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': notified drawing task (by mark_for_update)")
 			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
-			# println("Yielding to drawing task")
+			println("Yielding to drawing task, C.next_update = $(t-C.next_update)")
 			try_notify(C.waking_cond)
 		end
 	end
@@ -436,6 +441,17 @@ function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
 		C.rgb[2,i] = color[2]
 		C.rgb[3,i] = color[3]
 	end
+
+	# This throws an error on the GPU for unknown reasons
+	# Threads.@threads for i in CartesianIndices(C.m)
+	# 	v = C.m[i]
+	# 	# lin_index = LinearIndices(C.m)[i]
+	# 	# v = unsafe_load(ptr_m, lin_index)
+	# 	color = colormap(v)::NTuple{3,UInt8}
+	# 	C.rgb[1,i] = color[1]
+	# 	C.rgb[2,i] = color[2]
+	# 	C.rgb[3,i] = color[3]
+	# end
 end
 
 # A default colormap function
@@ -491,11 +507,11 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 	# glFinish() # supposedly blocks until GL upload finished
 end
 
-function to_gpu(c::Canvas)
-	textureP = [c.sprite.texture]
-	map_to_rgb!(c)
-	GLFW.MakeContextCurrent(c.window)
-	to_gpu(c.rgb, textureP) 
+function to_gpu(C::Canvas)
+	map_to_rgb!(C, C.colormap)
+	GLFW.MakeContextCurrent(C.window)
+	textureP = [C.sprite.texture]
+	to_gpu(C.rgb, textureP) 
 end
 
 # Requires that the OpenGL context is available on the calling thread
