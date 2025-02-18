@@ -1,7 +1,7 @@
 name = "SimpleCanvas"
 uuid = "3503df20-c81f-4d16-a856-8ccf80a9af60"
 authors = ["Andreas <andreas.vanbarel@gmail.com>"]
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 GLFW = "f7f18e0c-5ee9-5ccd-a5bf-e8befd85ed98"
