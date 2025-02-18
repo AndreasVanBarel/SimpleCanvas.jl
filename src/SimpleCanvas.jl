@@ -10,8 +10,8 @@ A module for drawing to the screen pixel by pixel.
 - `name!(C::Canvas, name)`: Sets the window name of `C`.
 - `windowsize!(C::Canvas, width, height)`: Sets the window size of `C`.
 - `windowscale!(C::Canvas, scale)`: Scales the window of `C`.
-- `diagnostic_level!(C::Canvas, level)`: Sets the diagnostic level for `C`.
 - `target_fps!(C::Canvas, fps)`: Sets the target frames per second for `C`.
+- `actual_fps(C::Canvas): Returns the actual frames per second of `C`.
 
 # Examples
 ```julia
@@ -24,11 +24,13 @@ C[101:200, 201:300] .= 1
 """
 module SimpleCanvas
 
+export Canvas
 export canvas, close, colormap!, name!, windowsize!, windowscale!
-export diagnostic_level!, target_fps!, show_fps!
+export target_fps!, show_fps!, actual_fps
 
 # Exported temporarily for development purposes
-export Canvas, to_gpu, map_to_rgb!
+export to_gpu, map_to_rgb!, diagnostic_level!
+export colormap_grayscale, colormap_spy
 # export vsync!
 
 using GLFW
@@ -50,6 +52,8 @@ default_fps = 60
 default_diagnostic_level = 0
 default_show_fps = true
 default_updates_immediately = true
+default_name = "Simple Canvas"
+
 max_time_fraction = 0.99
 
 programs = nothing
@@ -58,28 +62,12 @@ programs = nothing
 DEBUGGING = false
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
-# Initializes GLFW library
-function init_glfw()
-	GLFW.Init() || @error("GLFW failed to initialize")
 
-	# Specify OpenGL version (Note: MacOSX supports at most OpenGL 4.1)
-	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 3);
-	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MINOR, 3);
-	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
-    GLFW.WindowHint(GLFW.OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
-end
-init_glfw()
+"""
+	Canvas{T} <: AbstractMatrix{T}
 
-function reset_glfw()
-    GLFW.Terminate()
-    init_glfw()
-end
-
-# Detach the current OpenGL context from the calling thread
-function detach_context()
-	GLFW.MakeContextCurrent(GLFW.Window(C_NULL))
-end
-
+A canvas for drawing to the screen pixel by pixel. The canvas is backed by a matrix of type `T` and can be used as if it were a matrix. For constructing a `Canvas`, see `canvas`.
+"""
 mutable struct Canvas{T} <: AbstractMatrix{T}
 	# Core functionality
     m::Matrix{T}
@@ -117,8 +105,23 @@ get_height(C::Canvas) = size(C.m)[1]
 
 # TODO: Create a better construction interface, probably with Canvas type itself as name
 # such that Canvas{T}(w,h) creates a canvas of size w×h
-canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1]; name = "Simple Canvas")
-function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::String) where T 
+"""
+	canvas(M::AbstractMatrix; name)
+	canvas(M::AbstractMatrix, width, height; name)
+
+Create a `Canvas{T}` initialized by the contents of `AbstractMatrix{T}` `M`. The contents of `M` are copied and can be discarded afterwards.
+The canvas window will have the same size as `M`, unless `width` and `height` are specified explicitly.
+
+# Examples
+```julia
+using SimpleCanvas
+w,h = 800, 600
+M = zeros(h,w);
+C = canvas(M); # C can be used as if it were a Matrix
+# M is independent of C here. Write in C to update the canvas.
+```
+"""
+function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::String=default_name) where T 
 	debug("Creating canvas for matrix on thread $(Threads.threadid())")
 	m = collect(m)::Matrix{T} # Ensures that the matrix is copied and stored in a contiguous block of memory
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
@@ -147,10 +150,41 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
     return C
 end
 
+canvas(m::AbstractMatrix{T}) where T = canvas(m, size(m)[2], size(m)[1]; name=default_name)
+
+"""
+	canvas(T::Type, width, height; name)
+
+Equivalent to `canvas(zeros(T,height,width), width, height; name=name)`.
+"""
+canvas(T::Type, w::Integer, h::Integer; name::String=default_name) = canvas(zeros(T,h,w), w, h; name=name)
+
 
 ###################
 # Initializations #
 ###################
+
+# Initializes GLFW library
+function init_glfw()
+	GLFW.Init() || @error("GLFW failed to initialize")
+
+	# Specify OpenGL version (Note: MacOSX supports at most OpenGL 4.1)
+	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MAJOR, 3);
+	GLFW.WindowHint(GLFW.CONTEXT_VERSION_MINOR, 3);
+	GLFW.WindowHint(GLFW.OPENGL_PROFILE, GLFW.OPENGL_CORE_PROFILE);
+    GLFW.WindowHint(GLFW.OPENGL_FORWARD_COMPAT, GL_TRUE); # ? Supposedly needed for MacOSX
+end
+init_glfw()
+
+function reset_glfw()
+    GLFW.Terminate()
+    init_glfw()
+end
+
+# Detach the current OpenGL context from the calling thread
+function detach_context()
+	GLFW.MakeContextCurrent(GLFW.Window(C_NULL))
+end
 
 # Configures the GLFW window and sets the callback functions
 # This does not require the openGL context 
@@ -208,6 +242,11 @@ function gpu_allocate()
 	global sprite_vbo = vboP[1]
 end
 
+"""
+	close(C::Canvas)
+
+Closes the canvas `C`, releasing its resources.
+"""
 function close(C::Canvas)
 	C.updates_immediately = false # Prevents unnecessary yields to a drawing task that will close anyway
 	free(C.sprite)
@@ -242,6 +281,11 @@ function show(io::IO, mime::MIME"text/plain", C::Canvas)
     show(io, mime, C.m)
 end
 
+"""
+	actual_fps(C::Canvas)
+
+Returns the actual frames per second of `C`, rounded to the nearest `Int`. Note that `C` does not update when it isn't drawn to, so the actual frames per second will be lower than the target frames per second, and tends to `0` when `C` is idle.
+"""
 function actual_fps(C::Canvas)
 	Δupdate = C.next_update - C.last_update
 	return round(Int, Δupdate == 0 ? C.fps : 1e9/Δupdate)
@@ -278,7 +322,7 @@ function polling_task(C::Canvas)
 			sleep(1/C.fps)
 		end
 	catch e 
-		@error("Polling task for $(C.name):\n$e")
+		@error("Polling task for $(C.name) closed by error:\n$e")
 	finally
 		debug("polling task closing $(C.name)")
 		close(C)
@@ -317,7 +361,7 @@ function drawing_task(C::Canvas)
 			close(timer)
 		end
 	catch e 
-		@error("Drawing task for $(C.name):\n$e")
+		@error("Drawing task for $(C.name) closed by error:\n$e")
 	end
 	debug("drawing task for $(C.name) finished")
 end
@@ -379,39 +423,62 @@ end
 ## Options ##
 #############
 
+"""
+	name!(C::Canvas, name::String)
+
+Sets the window name of `C`.
+"""
 function name!(C::Canvas, name::String)
 	C.name = name
 	GLFW.SetWindowTitle(C.window, name)
 end
 
+"""
+	windowsize!(C::Canvas, width::Int, height::Int)
+
+Sets the window size of `C`.
+"""
 function windowsize!(C::Canvas, width::Int, height::Int)
 	GLFW.SetWindowSize(C.window, width, height)
 end
 
+"""
+	windowscale!(C::Canvas, scale::Real = 1)
+
+Resizes the window of `C` such that each element of the underlying matrix is displayed using `scale²` pixels on the screen. Calling `windowscale!(C)` thus makes each pixel correspond to a single matrix element.
+"""
 function windowscale!(C::Canvas, scale::Real = 1)
 	width = round(Int, size(C.m)[2]*scale)
 	height = round(Int, size(C.m)[1]*scale)
 	windowsize!(C, width, height)
 end
 
+"""
+	diagnostic_level!(C::Canvas, level::Int)
+
+Sets the diagnostic level for `C`. The diagnostic level determines the amount of information printed to the console.
+"""
 function diagnostic_level!(C::Canvas, level::Int)
 	C.diagnostic_level = level
 end
 
+"""
+	target_fps!(C::Canvas, fps::Real)
+
+Sets the target frames per second for `C`.
+"""
 function target_fps!(C::Canvas, fps::Real)
 	C.fps = fps
 end
 
+"""
+	show_fps!(C::Canvas, show::Bool=true)
+
+Shows the frames per second in the window title of `C`.
+"""
 function show_fps!(C::Canvas, show::Bool=true)
 	C.show_fps = show
 end
-
-# This requires the OpenGL context to be available on the calling thread
-# Currently not supported
-# function vsync!(C::Canvas, vsync::Bool)
-# 	GLFW.MakeContextCurrent(C.window)
-# 	GLFW.SwapInterval(vsync ? 1 : 0)
-# end
 
 
 ##################
@@ -420,20 +487,21 @@ end
 
 # Broadcast colormap on matrix
 function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
-	# NOTE: The colormap is passed as an argument such that the Julia compiler would specialize on it!
-
-	# ptr_m = pointer(C.m)
-	for i in CartesianIndices(C.m)
-		v = C.m[i]
-		# lin_index = LinearIndices(C.m)[i]
-		# v = unsafe_load(ptr_m, lin_index)
-		color = colormap(v)::NTuple{3,UInt8}
-		C.rgb[1,i] = color[1]
-		C.rgb[2,i] = color[2]
-		C.rgb[3,i] = color[3]
+	# NOTE: The colormap is passed as an explicit argument such that the Julia compiler would specialize on it! This is very important for performance.
+	try 
+		for i in CartesianIndices(C.m)
+			v = C.m[i]
+			color = UInt8.(colormap(v))
+			C.rgb[1,i] = color[1]
+			C.rgb[2,i] = color[2]
+			C.rgb[3,i] = color[3]
+		end
+	catch e
+		@error("Error during colormapping for $(C.name). Use `colormap!` to set a working colormap:\n$e")
 	end
 
 	# This throws an error on the GPU for unknown reasons
+	# # ptr_m = pointer(C.m)
 	# Threads.@threads for i in CartesianIndices(C.m)
 	# 	v = C.m[i]
 	# 	# lin_index = LinearIndices(C.m)[i]
@@ -455,8 +523,29 @@ end
 # Need function to convert from type T to pixel color values.
 # Need function to rotate canvas (just changes quad vertices of course)
 
+function colormap_spy(v::Number)
+	v == zero(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+end
+function colormap_spy(v)
+	isnothing(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+end
+
+
+"""
+	colormap!(C::Canvas{T}, colormap::Function)
+
+Sets the colormap function for `C`. This function must map an element of type `T` to a `Tuple{UInt8, UInt8, UInt8}` representing the RGB values of the corresponding pixel on the canvas. Functions may also return values that can be converted to `Tuple{UInt8, UInt8, UInt8}` using UInt8.(), e.g., `(255,0,0)`.
+
+# Examples
+```julia
+using SimpleCanvas
+C = canvas(Float64, 800, 600);
+colormap!(C, v::Float64 -> v==0.0 ? (0,0,0) : (255,255,255))
+```
+"""
 function colormap!(C::Canvas, colormap::Function)
 	C.colormap = colormap
+	map_to_rgb!(C)
 	mark_for_update(C)
 end
 
