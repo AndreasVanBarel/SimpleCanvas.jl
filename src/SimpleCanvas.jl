@@ -6,12 +6,12 @@ A module for drawing to the screen pixel by pixel.
 # Exports
 - `canvas(M::Matrix)`: Creates a `Canvas` for the matrix `M`.
 - `close(C::Canvas)`: Closes `C`, releasing its resources.
-- `colormap!(C::Canvas, colormap::Function)`: Sets the colormap function for `C`.
-- `name!(C::Canvas, name)`: Sets the window name of `C`.
-- `windowsize!(C::Canvas, width, height)`: Sets the window size of `C`.
-- `windowscale!(C::Canvas, scale)`: Scales the window of `C`.
-- `target_fps!(C::Canvas, fps)`: Sets the target frames per second for `C`.
-- `actual_fps(C::Canvas): Returns the actual frames per second of `C`.
+- `colormap!(C::Canvas, colormap::Function)`: Sets the color mapping function.
+- `name!(C::Canvas, name)`: Sets the window name.
+- `windowsize!(C::Canvas, width, height)`: Sets the window size.
+- `windowscale!(C::Canvas, scale)`: Scales the window.
+- `target_fps!(C::Canvas, fps)`: Sets the target frames per second.
+- `actual_fps(C::Canvas): Returns the actual frames per second.
 
 # Examples
 ```julia
@@ -273,12 +273,12 @@ end
 
 function show(io::IO, C::Canvas) 
     println(io, "$(typeof(C)) named '$(C.name)'")
-    show(io, C.m)
+    # show(io, C.m)
 end
 
 function show(io::IO, mime::MIME"text/plain", C::Canvas)
     println(io, "$(typeof(C)) named '$(C.name)'")
-    show(io, mime, C.m)
+    # show(io, mime, C.m)
 end
 
 """
@@ -436,7 +436,7 @@ end
 """
 	windowsize!(C::Canvas, width::Int, height::Int)
 
-Sets the window size of `C`.
+Sets the window size to `width` × `height`.
 """
 function windowsize!(C::Canvas, width::Int, height::Int)
 	GLFW.SetWindowSize(C.window, width, height)
@@ -445,7 +445,7 @@ end
 """
 	windowscale!(C::Canvas, scale::Real = 1)
 
-Resizes the window of `C` such that each element of the underlying matrix is displayed using `scale²` pixels on the screen. Calling `windowscale!(C)` thus makes each pixel correspond to a single matrix element.
+Resizes the window size such that each element of the underlying matrix is displayed using `scale²` pixels on the screen. Calling `windowscale!(C)` thus makes each pixel correspond to a single matrix element.
 """
 function windowscale!(C::Canvas, scale::Real = 1)
 	width = round(Int, size(C.m)[2]*scale)
@@ -456,7 +456,7 @@ end
 """
 	diagnostic_level!(C::Canvas, level::Int)
 
-Sets the diagnostic level for `C`. The diagnostic level determines the amount of information printed to the console.
+Sets the diagnostic level. The diagnostic level determines the amount of information printed to the console.
 """
 function diagnostic_level!(C::Canvas, level::Int)
 	C.diagnostic_level = level
@@ -465,7 +465,7 @@ end
 """
 	target_fps!(C::Canvas, fps::Real)
 
-Sets the target frames per second for `C`.
+Sets the target frames per second.
 """
 function target_fps!(C::Canvas, fps::Real)
 	C.fps = fps
@@ -534,7 +534,7 @@ end
 """
 	colormap!(C::Canvas{T}, colormap::Function)
 
-Sets the colormap function for `C`. This function must map an element of type `T` to a `Tuple{UInt8, UInt8, UInt8}` representing the RGB values of the corresponding pixel on the canvas. Functions may also return values that can be converted to `Tuple{UInt8, UInt8, UInt8}` using UInt8.(), e.g., `(255,0,0)`.
+Sets the color mapping function. `colormap` must map an element of type `T` to a `Tuple{UInt8, UInt8, UInt8}` representing the RGB values of the corresponding pixel on the canvas. `colormap` may also return values that can be converted to `Tuple{UInt8, UInt8, UInt8}` using UInt8.(), e.g., `(255,0,0)`.
 
 # Examples
 ```julia
