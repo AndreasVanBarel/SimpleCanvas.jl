@@ -562,6 +562,7 @@ getindex(C::Canvas, args...) = getindex(C.m, args...)
 ### General indexing support
 function setindex!(C::Canvas, V, args...)
 	setindex!(C.m, V, args...) # update CPU
+	# setindex!(C.rgb, UInt8.(C.colormap.(V)), args...)
 	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
 end
 
