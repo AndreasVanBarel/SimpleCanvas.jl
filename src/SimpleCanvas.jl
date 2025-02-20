@@ -55,12 +55,12 @@ default_updates_immediately = true
 default_name = "Simple Canvas"
 
 max_time_fraction = 0.99
-rgb_immediately = false
+const rgb_immediately = true # for performance purposes made constant
 
 programs = nothing
 
 # Debugging
-DEBUGGING = false
+const DEBUGGING = false # for performance purposes made constant
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 
@@ -72,7 +72,7 @@ A canvas for drawing to the screen pixel by pixel. The canvas is backed by a mat
 mutable struct Canvas{T} <: AbstractMatrix{T}
 	# Core functionality
     m::Matrix{T}
-	rgb::Array{UInt8, 3} # RGB(A) matrix (preallocated for performance)
+	rgb::Array{UInt8, 3} # RGB(A) matrix
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
@@ -558,16 +558,42 @@ end
 size(C::Canvas)	= size(C.m)
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 
-### General indexing support
+# This alone should provide general indexing support due to the fallbacks in the AbstractArray interface
+# function setindex!(C::Canvas{T}, V, i, j, colormap=C.colormap) where T # We want the colormap to be passed as an argument to specialize on it
+# 	setindex!(C.m, V, i, j) # update CPU
+# 	if rgb_immediately
+# 		color_V = UInt8.(colormap(V))
+# 		C.rgb[1, i, j] = color_V[1]
+# 		C.rgb[2, i, j] = color_V[2]
+# 		C.rgb[3, i, j] = color_V[3]
+# 	end
+# 	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
+# end
+
+
 function setindex!(C::Canvas, V, args...)
-	setindex!(C.m, V, args...) # update CPU
-	# if rgb_immediately
-	# 	color_V = UInt8.(C.colormap(V))
-	# 	setindex!(C.rgb, getindex.(color_V,1), 1, args...)
-	# 	setindex!(C.rgb, getindex.(color_V,2), 2, args...)
-	# 	setindex!(C.rgb, getindex.(color_V,3), 3, args...)
-	# end
-	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
+    C.m[args...] = V
+	rgb_immediately && _update_rgb!(C.rgb, C.colormap, V, args...)
+	mark_for_update(C)
+end
+
+# colormap is explicit since we want to specialize on it
+function _update_rgb!(rgb, colormap::Function, V, args...)
+	reds = view(rgb, 1, :, :)
+	greens = view(rgb, 2, :, :)
+	blues = view(rgb, 3, :, :)
+
+	if V isa Array
+		color_V = [UInt8.(colormap(v)) for v in V]
+		reds[args...] = getindex.(color_V,1)
+		greens[args...] = getindex.(color_V,2)
+		blues[args...] = getindex.(color_V,3)
+	else
+		color_V = UInt8.(colormap(V))
+		reds[args...] = color_V[1]
+		greens[args...] = color_V[2]
+		blues[args...] = color_V[3]
+	end
 end
 
 
