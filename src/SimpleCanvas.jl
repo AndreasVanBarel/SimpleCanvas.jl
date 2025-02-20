@@ -41,7 +41,7 @@ using Base.Threads
 
 import Base: close
 import Base: show
-import Base: size, length, axes, getindex, setindex!
+import Base: size, getindex, setindex!
 
 include("Sprite.jl")
 include("GLPrograms.jl")
@@ -55,6 +55,7 @@ default_updates_immediately = true
 default_name = "Simple Canvas"
 
 max_time_fraction = 0.99
+rgb_immediately = false
 
 programs = nothing
 
@@ -545,7 +546,7 @@ colormap!(C, v::Float64 -> v==0.0 ? (0,0,0) : (255,255,255))
 """
 function colormap!(C::Canvas, colormap::Function)
 	C.colormap = colormap
-	map_to_rgb!(C)
+	rgb_immediately && map_to_rgb!(C)
 	mark_for_update(C)
 end
 
@@ -555,14 +556,17 @@ end
 ###################################
 
 size(C::Canvas)	= size(C.m)
-length(C::Canvas) = length(C.m)	
-axes(C::Canvas) = axes(C.m)	
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 
 ### General indexing support
 function setindex!(C::Canvas, V, args...)
 	setindex!(C.m, V, args...) # update CPU
-	# setindex!(C.rgb, UInt8.(C.colormap.(V)), args...)
+	# if rgb_immediately
+	# 	color_V = UInt8.(C.colormap(V))
+	# 	setindex!(C.rgb, getindex.(color_V,1), 1, args...)
+	# 	setindex!(C.rgb, getindex.(color_V,2), 2, args...)
+	# 	setindex!(C.rgb, getindex.(color_V,3), 3, args...)
+	# end
 	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
 end
 
@@ -589,7 +593,7 @@ function to_gpu(tex::Array{UInt8,3}, textureP)
 end
 
 function to_gpu(C::Canvas)
-	map_to_rgb!(C, C.colormap)
+	rgb_immediately || map_to_rgb!(C, C.colormap)
 	GLFW.MakeContextCurrent(C.window)
 	textureP = [C.sprite.texture]
 	to_gpu(C.rgb, textureP) 
