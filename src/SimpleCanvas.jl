@@ -570,30 +570,47 @@ getindex(C::Canvas, args...) = getindex(C.m, args...)
 # 	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
 # end
 
-
-function setindex!(C::Canvas, V, args...)
-    C.m[args...] = V
-	rgb_immediately && _update_rgb!(C.rgb, C.colormap, V, args...)
+# Single element V
+function setindex!(C::Canvas, V, I...)
+    C.m[I...] = V # set matrix itself
+	if rgb_immediately
+		i,j = Tuple(CartesianIndices(C.m)[I...])
+		_set_rgb!(C.rgb, C.colormap, V, i, j)
+	end
 	mark_for_update(C)
+	return V # for seamless consistency with Base.setindex!
 end
 
-# colormap is explicit since we want to specialize on it
-function _update_rgb!(rgb, colormap::Function, V, args...)
-	reds = view(rgb, 1, :, :)
-	greens = view(rgb, 2, :, :)
-	blues = view(rgb, 3, :, :)
+function _set_rgb!(rgb, colormap, V, i, j)
+    color_V = UInt8.(colormap(V)) # should be a tuple of 3 elements
+    rgb[1,i,j] = color_V[1]
+    rgb[2,i,j] = color_V[2]
+    rgb[3,i,j] = color_V[3]
+    # rgb[1:3, cart_indices] .= UInt8.(colormap(V))
+end
 
-	if V isa Array
-		color_V = [UInt8.(colormap(v)) for v in V]
-		reds[args...] = getindex.(color_V,1)
-		greens[args...] = getindex.(color_V,2)
-		blues[args...] = getindex.(color_V,3)
-	else
-		color_V = UInt8.(colormap(V))
-		reds[args...] = color_V[1]
-		greens[args...] = color_V[2]
-		blues[args...] = color_V[3]
-	end
+# Array V
+function setindex!(C::Canvas, V::AbstractArray, I...)
+    C.m[I...] = V # set matrix itself
+	if rgb_immediately
+		cart_indices = _efficient_cart_indices(C.m, I...) # this is an array of CartesianIndex
+		# print("cart_indices: ", cart_indices)
+		_set_rgb!(C.rgb, C.colormap, V, cart_indices)
+    end
+    return V # for seamless consistency with Base.setindex!
+end
+
+_efficient_cart_indices(M, I...) = CartesianIndices(M)[I...] # fallback
+_efficient_cart_indices(M, i::Integer, J) = CartesianIndices(M)[i:i, J]
+_efficient_cart_indices(M, I, j::Integer) = CartesianIndices(M)[I, j:j]
+
+function _set_rgb!(rgb, colormap, V::AbstractArray, cart_indices)
+    for (i, idx) in enumerate(cart_indices)
+        color_V = UInt8.(colormap(V[i])) # should be a tuple of 3 elements
+        rgb[1, idx] = color_V[1]
+        rgb[2, idx] = color_V[2]
+        rgb[3, idx] = color_V[3]
+    end
 end
 
 
