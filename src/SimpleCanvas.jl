@@ -16,9 +16,7 @@ A module for drawing to the screen pixel by pixel.
 # Examples
 ```julia
 using SimpleCanvas
-w,h = 800, 600
-M = zeros(h,w);
-C = canvas(M); # C can be used as if it were a Matrix
+C = canvas(zeros(600,800)); # C can be used as if it were a Matrix
 C[101:200, 201:300] .= 1
 ```
 """
@@ -30,8 +28,8 @@ export target_fps!, show_fps!, actual_fps
 
 # Exported temporarily for development purposes
 export to_gpu, map_to_rgb!, diagnostic_level!
-export colormap_grayscale, colormap_spy
-# export vsync!
+export colormap_grayscale, colormap_spy, colormap_identity, colormap_rgb
+export colormap_wheel, colormap_blue_to_red
 
 using GLFW
 using ModernGL
@@ -72,7 +70,7 @@ A canvas for drawing to the screen pixel by pixel. The canvas is backed by a mat
 mutable struct Canvas{T} <: AbstractMatrix{T}
 	# Core functionality
     m::Matrix{T}
-	rgb::Array{UInt8, 3} # RGB(A) matrix
+	rgb::Array{UInt8, 3} # RGB matrix
 	colormap::Function # T -> UInt8[3] 
     window
 	sprite
@@ -307,8 +305,7 @@ end
 #    All openGL calls etc
 #    Does the copying of the matrix to the GPU
 
-# The reason is that GLFW window and OS related tasks must be done on the main thread.
-# It might be possible to not do this, at the cost of robustness and compatibility.
+# The reason is that GLFW window and OS related tasks must be done on the main thread, unless one is willing to sacrifice robustness and compatibility.
 
 function polling_task(C::Canvas)
 	debug("started polling task for $(C.name) on thread $(Threads.threadid())")
@@ -545,6 +542,30 @@ end
 # Very general colormap
 colormap_spy(v) = isnothing(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
 colormap_spy(v::Number) = iszero(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+
+# colorwheel colormap
+function colormap_wheel(value::Real)
+    if value < 0.0; r = g = b = 0.0;
+    elseif value <= 1/6; r = 0.0; g = 6value; b = 1.0; 
+    elseif value <= 2/6; r = 0.0; g = 1.0; b = 1.0 - 6value + 1; 
+    elseif value <= 3/6; r = 6value - 2; g = 1.0; b = 0.0;
+    elseif value <= 4/6; r = 1.0; g = 1.0 - 6value + 3; b = 0.0;
+    elseif value <= 5/6; r = 1.0; g = 0.0; b = 6value - 4;
+    elseif value <= 6/6; r = 1.0 - 6value + 5; g = 0.0; b = 1.0;
+    else; r = g = b = 1.0; end
+    round.(UInt8, 255 .*(r,g,b))
+end
+
+# blue to red colormap
+function colormap_blue_to_red(value::Real)
+    if value < 0.0; r = g = 0.0; b = 1.0;
+    elseif value <= 0.25; r = 0.0; g = 4 * value; b = 1.0; 
+    elseif value <= 0.5; r = 0.0; g = 1.0; b = 1.0 - 4 * (value - 0.25); 
+    elseif value <= 0.75; r = 4 * (value - 0.5); g = 1.0; b = 0.0;
+    elseif value <= 1.0; r = 1.0; g = 1.0 - 4 * (value - 0.75); b = 0.0;
+    else; r = 1.0; g = b = 0.0; end
+    round.(UInt8, 255 .*(r,g,b))
+end
 
 # default colormaps during construction
 default_colormap(::Type{<:Any}) = colormap_spy
