@@ -517,22 +517,41 @@ function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
 	# end
 end
 
-function colormap_grayscale(v::Float64)
+function colormap_grayscale(v)
 	v < 0 && (v = 0.0) # truncation
 	v > 1 && (v = 1.0) # truncation
 	r = round(UInt8, v*255)
 	return (r,r,r)
 end
-
-function colormap_spy(v::Number)
-	v == zero(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
-end
-function colormap_spy(v)
-	isnothing(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+function colormap_grayscale(v::Integer) 
+	v < 0 && (v = 0) # truncation
+	v > 255 && (v = 255) # truncation
+	return UInt8.((v,v,v))
 end
 
-default_colormap(::Type{T}) where T = colormap_spy
-default_colormap(::Type{T}) where T<:Real = colormap_grayscale
+colormap_identity(v::NTuple{3, UInt8}) = return v
+
+# Interprets an unsigned integer as an RGB value
+# For UInt32 the format is 0x00RRGGBB
+# For longer UInts, the format is 0x...RRGGBB
+# For UInt8, 0xBB, UInt16, 0xGGBB
+function colormap_rgb(v::Unsigned)
+	b = UInt8(v & 0xFF)
+	g = UInt8((v >> 8) & 0xFF)
+	r = UInt8((v >> 16) & 0xFF)
+	return (r,g,b)
+end
+
+# Very general colormap
+colormap_spy(v) = isnothing(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+colormap_spy(v::Number) = iszero(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
+
+# default colormaps during construction
+default_colormap(::Type{<:Any}) = colormap_spy
+default_colormap(::Type{<:Real}) = colormap_grayscale
+default_colormap(::Type{<:Unsigned}) = colormap_rgb
+default_colormap(::Type{UInt8}) = colormap_grayscale
+default_colormap(::Type{NTuple{3,UInt8}}) = colormap_identity
 
 
 """
