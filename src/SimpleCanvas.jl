@@ -127,7 +127,8 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	m = collect(m)::Matrix{T} # Ensures that the matrix is copied and stored in a contiguous block of memory
 	rgb = Array{UInt8, 3}(undef, 3, size(m)[1], size(m)[2])
 	drawing_cond = Threads.Condition()
-    C = Canvas{T}(m, rgb, colormap_grayscale, nothing, nothing,
+	cmap = default_colormap(T)
+    C = Canvas{T}(m, rgb, cmap, nothing, nothing,
 		nothing, nothing, drawing_cond,
 		0, 0, true, default_updates_immediately, default_fps, 
 		default_show_fps, default_diagnostic_level, name)
@@ -481,6 +482,8 @@ function show_fps!(C::Canvas, show::Bool=true)
 	C.show_fps = show
 end
 
+# TODO: A function to rotate canvas (just changes quad vertices of course)
+
 
 ##################
 ## Colormapping ##
@@ -514,15 +517,12 @@ function map_to_rgb!(C::Canvas{T}, colormap::Function=C.colormap) where T
 	# end
 end
 
-# A default colormap function
 function colormap_grayscale(v::Float64)
 	v < 0 && (v = 0.0) # truncation
 	v > 1 && (v = 1.0) # truncation
 	r = round(UInt8, v*255)
 	return (r,r,r)
 end
-# Need function to convert from type T to pixel color values.
-# Need function to rotate canvas (just changes quad vertices of course)
 
 function colormap_spy(v::Number)
 	v == zero(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
@@ -530,6 +530,9 @@ end
 function colormap_spy(v)
 	isnothing(v) ? UInt8.((0,0,0)) : UInt8.((255,255,255))
 end
+
+default_colormap(::Type{T}) where T = colormap_spy
+default_colormap(::Type{T}) where T<:Real = colormap_grayscale
 
 
 """
@@ -590,6 +593,7 @@ function setindex!(C::Canvas, V::AbstractArray, I...)
     return V # for seamless consistency with Base.setindex!
 end
 
+# Ensures that this is lazy, i.e., the CartesianIndices are computed when needed, not allocated in advance
 _efficient_cart_indices(M, I...) = CartesianIndices(M)[I...] # fallback
 _efficient_cart_indices(M, i::Integer, J) = CartesianIndices(M)[i:i, J]
 _efficient_cart_indices(M, I, j::Integer) = CartesianIndices(M)[I, j:j]
