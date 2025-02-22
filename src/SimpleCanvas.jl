@@ -558,30 +558,20 @@ end
 size(C::Canvas)	= size(C.m)
 getindex(C::Canvas, args...) = getindex(C.m, args...)
 
-# This alone should provide general indexing support due to the fallbacks in the AbstractArray interface
-# function setindex!(C::Canvas{T}, V, i, j, colormap=C.colormap) where T # We want the colormap to be passed as an argument to specialize on it
-# 	setindex!(C.m, V, i, j) # update CPU
-# 	if rgb_immediately
-# 		color_V = UInt8.(colormap(V))
-# 		C.rgb[1, i, j] = color_V[1]
-# 		C.rgb[2, i, j] = color_V[2]
-# 		C.rgb[3, i, j] = color_V[3]
-# 	end
-# 	mark_for_update(C) # Note that this is the bottleneck for sequential single element updates; regardless, it should be quite fast.
-# end
-
 # Single element V
 function setindex!(C::Canvas, V, I...)
     C.m[I...] = V # set matrix itself
 	if rgb_immediately
 		i,j = Tuple(CartesianIndices(C.m)[I...])
-		_set_rgb!(C.rgb, C.colormap, V, i, j)
+		_set_rgb!(C, C.colormap, V, i, j)
 	end
 	mark_for_update(C)
 	return V # for seamless consistency with Base.setindex!
 end
 
-function _set_rgb!(rgb, colormap, V, i, j)
+function _set_rgb!(C::Canvas{T}, colormap, V, i, j) where T
+	V = V isa T ? V : convert(T, V)
+	rgb = C.rgb
     color_V = UInt8.(colormap(V)) # should be a tuple of 3 elements
     rgb[1,i,j] = color_V[1]
     rgb[2,i,j] = color_V[2]
@@ -594,9 +584,9 @@ function setindex!(C::Canvas, V::AbstractArray, I...)
     C.m[I...] = V # set matrix itself
 	if rgb_immediately
 		cart_indices = _efficient_cart_indices(C.m, I...) # this is an array of CartesianIndex
-		# print("cart_indices: ", cart_indices)
-		_set_rgb!(C.rgb, C.colormap, V, cart_indices)
+		_set_rgb!(C, C.colormap, V, cart_indices)
     end
+	mark_for_update(C)
     return V # for seamless consistency with Base.setindex!
 end
 
@@ -604,9 +594,11 @@ _efficient_cart_indices(M, I...) = CartesianIndices(M)[I...] # fallback
 _efficient_cart_indices(M, i::Integer, J) = CartesianIndices(M)[i:i, J]
 _efficient_cart_indices(M, I, j::Integer) = CartesianIndices(M)[I, j:j]
 
-function _set_rgb!(rgb, colormap, V::AbstractArray, cart_indices)
+function _set_rgb!(C::Canvas{T}, colormap, V::AbstractArray, cart_indices) where T
+	rgb = C.rgb
     for (i, idx) in enumerate(cart_indices)
-        color_V = UInt8.(colormap(V[i])) # should be a tuple of 3 elements
+		V_T = V[i] isa T ? V[i] : convert(T, V[i])
+        color_V = UInt8.(colormap(V_T)) # should be a tuple of 3 elements
         rgb[1, idx] = color_V[1]
         rgb[2, idx] = color_V[2]
         rgb[3, idx] = color_V[3]
