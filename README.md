@@ -41,7 +41,7 @@ Change the color map by calling `colormap!(c, cmap)`. The function `cmap` should
 
 ```julia
 w, h = 800, 600
-start, stop = -0.2, 1,2
+start, stop = -0.2, 1.2
 c = canvas(ones(h).*LinRange(start, stop, w)') # h×w Canvas{Float64}
 function cmap_blue_to_red(value::Float64)
     if value < 0.0; r = g = 0.0; b = 1.0;
@@ -62,7 +62,7 @@ Given a `Canvas c`:
  - `windowsize!(c,w,h)` sets the window size to `w` by `h`.
  - `windowscale!(c,scale=1)` sets the window size to the size of the underlying canvas, scaled by `scale`.
  - `target_fps!(c,t)` sets target fps to `t`.
- - `show_fps!(c,true)` shows measured fps in window title. (Available in a future release)
+ - `show_fps!(c,true)` shows measured fps in window title.
 
 # Notes
 
