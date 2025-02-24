@@ -55,10 +55,12 @@ default_name = "Simple Canvas"
 max_time_fraction = 0.99
 const rgb_immediately = true # for performance purposes made constant
 
+draws = 0
+
 programs = nothing
 
 # Debugging
-const DEBUGGING = false # for performance purposes made constant
+const DEBUGGING = true # for performance purposes made constant
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 
@@ -336,6 +338,8 @@ function drawing_task(C::Canvas)
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
 	timer = nothing 
 
+	global draws 
+	
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			update_was_pending = C.update_pending
@@ -343,8 +347,8 @@ function drawing_task(C::Canvas)
 			update_draw(C)
 			t_end = time_ns()
 			Δt = t_end - t
-			wait_time_s = max(1/C.fps - Δt*1e-9, 0.0)
-			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent)")
+			wait_time_s = max(1/C.fps - 1e-9Δt, 0.0)
+			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent), draws = $draws")
 		
 			# In case the update took a long time, we provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
 			if Δt > 1e9/C.fps*max_time_fraction
@@ -655,7 +659,6 @@ end
 ################################
 
 # Uploads texture tex to GPU at address textureP[1]
-# ToDo: should somehow figure out a way to check when this operation is done
 function to_gpu(tex::Array{UInt8,3}, textureP)
     size(tex)[1]!=3 && size(tex)[1]!=4 && (@error("texture format not supported"); return nothing)
     isrgba = size(tex)[1]==4
@@ -679,7 +682,8 @@ function to_gpu(C::Canvas)
 end
 
 # Requires that the OpenGL context is available on the calling thread
-function update!(C::Canvas)
+function update!(C::Canvas)~
+	global draw += 1
 	isnothing(C.window) && return
 
 	C.last_update = time_ns()
