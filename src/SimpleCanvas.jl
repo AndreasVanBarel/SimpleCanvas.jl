@@ -343,31 +343,32 @@ function drawing_task(C::Canvas)
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			update_was_pending = C.update_pending
-			update_was_pending && debug("============= Drawing task for $(C.name) iteration start =============")
-			t = time_ns()
-			update_draw(C)
-			t_end = time_ns()
-			update_was_pending && debug("After update_draw, there was an overhead of $(1e-9(C.last_update - t))")
-			Δt = t_end - t
-			wait_time_s = max(1/C.fps - 1e-9Δt, 0.0)
-			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent), draws = $draws")
+			update_was_pending && debug("\n============= Drawing task for $(C.name) iteration start =============")
+			t_start_update_draw = time_ns()
+			update_draw!(C)
+			Δt_update_draw = time_ns() - t_start_update_draw
+
+			update_was_pending && debug("Drawing task for $(C.name): update_draw! in $(1e-9Δt_update_draw)s ($(round(Int,1e9/Δt_update_draw)) fps equivalent) (#draws = $draws)")
 		
 			# In case the update took a long time, we provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
-			if Δt > 1e9/C.fps*max_time_fraction
-				Δnext_update = round(UInt64, Δt/max_time_fraction)
+			if Δt_update_draw > 1e9/C.fps*max_time_fraction
+				Δnext_update = round(UInt64, Δt_update_draw/max_time_fraction)
 			else 
 				Δnext_update = round(UInt64, 1e9/C.fps)
 			end
-			C.next_update = t + Δnext_update
-			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
-			update_was_pending && debug("wait timer for $(C.name) is $(1e-9(Δnext_update - Δt))")
+			C.next_update = t_start_update_draw + Δnext_update
+			t_timer = max(Δnext_update - Δt_update_draw, 0)
 
-			t_wait_start = time_ns()
-			timer = create_notify_timer(C.drawing_cond, (Δnext_update - Δt)*1e-9)
+			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
+			update_was_pending && debug("wait timer for $(C.name) is $(1e-9t_timer)")
+
+			t_start_idle = time_ns()
+			timer = create_notify_timer(C.drawing_cond, 1e-9t_timer)
 			try_wait(C.drawing_cond)
 			close(timer)
-			t_wait_end = time_ns()
-			update_was_pending && debug("The actual waiting time was $(1e-9(t_wait_end - t_wait_start))")
+			Δt_idle = time_ns() - t_start_idle
+
+			update_was_pending && debug("The actual waiting time was $(1e-9Δt_idle)")
 		end
 	catch e 
 		@error("Drawing task for $(C.name) closed by error:\n$e")
@@ -375,7 +376,7 @@ function drawing_task(C::Canvas)
 	debug("drawing task for $(C.name) finished")
 end
 
-function update_draw(C::Canvas)		
+function update_draw!(C::Canvas)		
 	GLFW.MakeContextCurrent(C.window)
 	if C.update_pending == true
 		C.diagnostic_level >= 1 && println("Canvas '$(C.name)': upload to GPU & redraw (initiated by polling task)")
@@ -400,7 +401,7 @@ end
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': notified drawing task (by mark_for_update)")
 			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
 			try_notify(C.drawing_cond)
-			yield() 
+			sleep(0.001)
 		end
 	end
 end
