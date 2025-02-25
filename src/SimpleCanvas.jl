@@ -339,13 +339,15 @@ function drawing_task(C::Canvas)
 	timer = nothing 
 
 	global draws 
-	
+
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
 			update_was_pending = C.update_pending
+			update_was_pending && debug("============= Drawing task for $(C.name) iteration start =============")
 			t = time_ns()
 			update_draw(C)
 			t_end = time_ns()
+			update_was_pending && debug("After update_draw, there was an overhead of $(1e-9(C.last_update - t))")
 			Δt = t_end - t
 			wait_time_s = max(1/C.fps - 1e-9Δt, 0.0)
 			update_was_pending && debug("Drawing task for $(C.name) took $(1e-9Δt)s, sleeping for $wait_time_s ($(round(Int,1e9/Δt)) fps equivalent), draws = $draws")
@@ -358,10 +360,14 @@ function drawing_task(C::Canvas)
 			end
 			C.next_update = t + Δnext_update
 			update_was_pending && debug("Δnext_update for $(C.name) is $(1e-9Δnext_update)")
+			update_was_pending && debug("wait timer for $(C.name) is $(1e-9(Δnext_update - Δt))")
 
+			t_wait_start = time_ns()
 			timer = create_notify_timer(C.drawing_cond, (Δnext_update - Δt)*1e-9)
 			try_wait(C.drawing_cond)
 			close(timer)
+			t_wait_end = time_ns()
+			update_was_pending && debug("The actual waiting time was $(1e-9(t_wait_end - t_wait_start))")
 		end
 	catch e 
 		@error("Drawing task for $(C.name) closed by error:\n$e")
@@ -682,8 +688,8 @@ function to_gpu(C::Canvas)
 end
 
 # Requires that the OpenGL context is available on the calling thread
-function update!(C::Canvas)~
-	global draw += 1
+function update!(C::Canvas)
+	global draws += 1
 	isnothing(C.window) && return
 
 	C.last_update = time_ns()
