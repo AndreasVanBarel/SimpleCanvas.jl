@@ -59,10 +59,10 @@ colormap!(c, cmap_blue_to_red)
 
 Given a `Canvas c`:
  - `name!(c,n)` changes the window name to `n`.
- - `windowsize!(c,w,h)` sets the window size to `w` by `h`.
- - `windowscale!(c,scale=1)` sets the window size to the size of the underlying canvas, scaled by `scale`.
+ - `window_size!(c,w,h)` sets the window size to `w` by `h`.
+ - `window_scale!(c,scale=1)` sets the window size to the size of the underlying canvas, scaled by `scale`.
  - `target_fps!(c,t)` sets target fps to `t`.
- - `show_fps!(c,true)` shows measured fps in window title.
+ - `show_fps!(c,true)` shows fps measurement in window title.
 
 # Notes
 
