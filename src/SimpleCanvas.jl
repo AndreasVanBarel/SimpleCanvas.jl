@@ -8,8 +8,8 @@ A module for drawing to the screen pixel by pixel.
 - `close(C::Canvas)`: Closes `C`, releasing its resources.
 - `colormap!(C::Canvas, colormap::Function)`: Sets the color mapping function.
 - `name!(C::Canvas, name)`: Sets the window name.
-- `windowsize!(C::Canvas, width, height)`: Sets the window size.
-- `windowscale!(C::Canvas, scale)`: Scales the window.
+- `window_size!(C::Canvas, width, height)`: Sets the window size.
+- `window_scale!(C::Canvas, scale)`: Scales the window.
 - `target_fps!(C::Canvas, fps)`: Sets the target frames per second.
 - `actual_fps(C::Canvas): Returns the actual frames per second.
 
@@ -23,7 +23,7 @@ C[101:200, 201:300] .= 1
 module SimpleCanvas
 
 export Canvas
-export canvas, close, colormap!, name!, windowsize!, windowscale!
+export canvas, close, colormap!, name!, window_size!, window_scale!
 export target_fps!, show_fps!, actual_fps
 
 # Exported temporarily for development purposes
@@ -52,16 +52,15 @@ default_show_fps = true
 default_updates_immediately = true
 default_name = "Simple Canvas"
 
+# Developer Settings
 max_time_fraction = 0.99
 const rgb_immediately = true # for performance purposes made constant
-
-draws = 0
-
-programs = nothing
-
+# note that setting this to false requires the use of a colormap that is defined before the canvas is created
 # Debugging
 const DEBUGGING = true # for performance purposes made constant
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
+
+programs = nothing
 
 
 """
@@ -87,7 +86,8 @@ mutable struct Canvas{T} <: AbstractMatrix{T}
 	next_update::UInt64 # earliest next time that a call may yield to the drawing task
 	update_pending::Bool # whether there is a change to m that is not uploaded to the GPU and thus not reflected on the canvas
 	updates_immediately::Bool
-	fps::Number
+	fps::Number # target frames per second under load
+	E_Δt_iteration::Float64 # exponential moving average of the time between iterations
 
 	# Additional functionality
 	show_fps::Bool
@@ -130,7 +130,7 @@ function canvas(m::AbstractMatrix{T}, width::Integer, height::Integer; name::Str
 	cmap = default_colormap(T)
     C = Canvas{T}(m, rgb, cmap, nothing, nothing,
 		nothing, nothing, drawing_cond,
-		0, 0, true, default_updates_immediately, default_fps, 
+		0, 0, true, default_updates_immediately, default_fps, 1/default_fps,
 		default_show_fps, default_diagnostic_level, name)
 		
 	# Create a window with an OpenGL context
@@ -259,7 +259,7 @@ function close(C::Canvas)
     return
 end
 
-function make_framebuffer_size_callback(C)
+function make_framebuffer_size_callback(C::Canvas)
 	function framebuffer_size_callback(window::GLFW.Window, width, height)
 		debug("$(C.name) was resized to $width × $height")
 		C.update_pending = true
@@ -289,8 +289,11 @@ end
 Returns the actual frames per second of `C`, rounded to the nearest `Int`. Note that `C` does not update when it isn't drawn to, so the actual frames per second will be lower than the target frames per second, and tends to `0` when `C` is idle.
 """
 function actual_fps(C::Canvas)
-	Δupdate = C.next_update - C.last_update
-	return round(Int, Δupdate == 0 ? C.fps : 1e9/Δupdate)
+	(time_ns() - C.last_update) < 5e9/C.fps || return 0
+	E_Δt = C.E_Δt_iteration
+	return round(Int, E_Δt == 0 ? C.fps : 1/E_Δt)
+	# Δupdate = C.next_update - C.last_update
+	# return round(Int, Δupdate == 0 ? C.fps : 1e9/Δupdate)
 end
 
 
@@ -338,24 +341,29 @@ function drawing_task(C::Canvas)
 	sleep(0.1) # Give the main thread some time to create the window and release the OpenGL context
 	timer = nothing 
 
-	global draws 
+	t_last_iteration = time() - 1/C.fps # Sets the first guess for Δt_iteration to 1/C.fps
+	α = 0.9 # Exponential moving average coefficient for Δt_iteration
 
 	try
 		while !isnothing(C.window) && !GLFW.WindowShouldClose(C.window)
+			Δt_iteration = time() - t_last_iteration
+			C.update_pending ? (C.E_Δt_iteration = α*C.E_Δt_iteration + (1-α)*Δt_iteration) : nothing
+			t_last_iteration = time()
+
 			update_was_pending = C.update_pending
 			update_was_pending && debug("\n============= Drawing task for $(C.name) iteration start =============")
 			t_start_update_draw = time_ns()
 			update_draw!(C)
 			Δt_update_draw = time_ns() - t_start_update_draw
 
-			update_was_pending && debug("Drawing task for $(C.name): update_draw! in $(1e-9Δt_update_draw)s ($(round(Int,1e9/Δt_update_draw)) fps equivalent) (#draws = $draws)")
+			update_was_pending && debug("Drawing task for $(C.name): update_draw! in $(1e-9Δt_update_draw)s ($(round(Int,1e9/Δt_update_draw)) fps equivalent)")
 		
 			# In case the update took a long time, we provide the caller with some additional time to do his business. We make it so that at most max_time_fraction of the time goes to the canvas update. If the update takes longer, we allow the caller at least that amount divided by max_time_fraction. The target fps will then not be reached.
 			if Δt_update_draw > 1e9/C.fps*max_time_fraction
 				Δnext_update = round(UInt64, Δt_update_draw/max_time_fraction)
 			else 
 				Δnext_update = round(UInt64, 1e9/C.fps)
-			end
+			end # for max_time_fraction < 1, Δnext_update is always at least 1e9/C.fps
 			C.next_update = t_start_update_draw + Δnext_update
 			t_timer = max(Δnext_update - Δt_update_draw, 0)
 
@@ -368,7 +376,7 @@ function drawing_task(C::Canvas)
 			close(timer)
 			Δt_idle = time_ns() - t_start_idle
 
-			update_was_pending && debug("The actual waiting time was $(1e-9Δt_idle)")
+			update_was_pending && debug("The actual waiting time: $(1e-9Δt_idle), total: $(1e-9(Δt_update_draw+Δt_idle)) ($(round(Int,1e9/(Δt_update_draw+Δt_idle))) fps equivalent)")
 		end
 	catch e 
 		@error("Drawing task for $(C.name) closed by error:\n$e")
@@ -400,8 +408,9 @@ end
 			# println("Yielding to drawing task, t-C.next_update = $(1e-9(t-C.next_update))")
 			C.diagnostic_level >= 1 && println("Canvas '$(C.name)': notified drawing task (by mark_for_update)")
 			C.next_update = C.next_update + round(Int, 1e9/C.fps) # Ensures that this won't be called again until at least 1/fps seconds have passed
+			# Note that the drawing task will refine C.next_update once it is clear how long the update took. This is a mere minimal time between updates.
 			try_notify(C.drawing_cond)
-			sleep(0.001)
+			sleep(0.001) # This ensures a 'long' yield to the drawing task
 		end
 	end
 end
@@ -410,6 +419,8 @@ end
     lock(cond)
     try
         notify(cond)
+	catch e 
+		debug("Error during try_notify: $e")
     finally
         unlock(cond)
     end
@@ -419,6 +430,8 @@ end
 	lock(cond)
 	try
 		wait(cond)
+	catch e 
+		debug("Error during try_wait: $e")
 	finally
 		unlock(cond)
 	end
@@ -444,23 +457,23 @@ function name!(C::Canvas, name::String)
 end
 
 """
-	windowsize!(C::Canvas, width::Int, height::Int)
+	window_size!(C::Canvas, width::Int, height::Int)
 
 Sets the window size to `width` × `height`.
 """
-function windowsize!(C::Canvas, width::Int, height::Int)
+function window_size!(C::Canvas, width::Int, height::Int)
 	GLFW.SetWindowSize(C.window, width, height)
 end
 
 """
-	windowscale!(C::Canvas, scale::Real = 1)
+	window_scale!(C::Canvas, scale::Real = 1)
 
-Resizes the window size such that each element of the underlying matrix is displayed using `scale²` pixels on the screen. Calling `windowscale!(C)` thus makes each pixel correspond to a single matrix element.
+Resizes the window size such that each element of the underlying matrix is displayed using `scale²` pixels on the screen. Calling `window_scale!(C)` thus makes each pixel correspond to a single matrix element.
 """
-function windowscale!(C::Canvas, scale::Real = 1)
+function window_scale!(C::Canvas, scale::Real = 1)
 	width = round(Int, size(C.m)[2]*scale)
 	height = round(Int, size(C.m)[1]*scale)
-	windowsize!(C, width, height)
+	window_size!(C, width, height)
 end
 
 """
@@ -690,7 +703,6 @@ end
 
 # Requires that the OpenGL context is available on the calling thread
 function update!(C::Canvas)
-	global draws += 1
 	isnothing(C.window) && return
 
 	C.last_update = time_ns()
