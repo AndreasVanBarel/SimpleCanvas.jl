@@ -57,7 +57,7 @@ max_time_fraction = 0.99
 const rgb_immediately = true # for performance purposes made constant
 # note that setting this to false requires the use of a colormap that is defined before the canvas is created
 # Debugging
-const DEBUGGING = true # for performance purposes made constant
+const DEBUGGING = false # for performance purposes made constant
 debug(x...) = DEBUGGING && println("DEBUG: ", x...)
 
 programs = nothing
